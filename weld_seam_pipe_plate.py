@@ -476,6 +476,13 @@ def main():
     ap.add_argument("--radius", type=float, default=None, help="管外半径名义值 mm（强烈建议给）")
     ap.add_argument("--radius-tol", type=float, default=2.0, help="半径容差 mm")
     ap.add_argument("--voxel", type=float, default=0.5, help="分割用下采样体素 mm")
+    ap.add_argument("--outlier", choices=["radius", "stat", "none"], default="radius",
+                    help="去离群方式: radius=半径滤波(默认,保留稀疏的交界处点) stat=统计滤波 none=不滤")
+    ap.add_argument("--outlier-radius", type=float, default=2.0, help="半径滤波搜索半径 mm")
+    ap.add_argument("--outlier-min-pts", type=int, default=3, help="半径内至少点数")
+    ap.add_argument("--sor-std", type=float, default=4.0, help="统计滤波 std_ratio（仅 --outlier stat）")
+    ap.add_argument("--cluster-eps", type=float, default=None,
+                    help="管子聚类 DBSCAN 半径 mm，默认 max(4*voxel, 2.5)；根部稀疏时适当加大")
     ap.add_argument("--plane-thr", type=float, default=0.4, help="平面 RANSAC 阈值 mm")
     ap.add_argument("--cyl-thr", type=float, default=0.5, help="圆柱内点阈值 mm")
     ap.add_argument("--step-deg", type=float, default=1.0, help="焊缝角度步长 deg")
@@ -502,8 +509,16 @@ def main():
     if args.roi:
         bb = o3d.geometry.AxisAlignedBoundingBox(np.array(args.roi[:3]), np.array(args.roi[3:]))
         pcd = pcd.crop(bb)
-    print(f"[输入] {len(pcd.points)} 点")
-    pcd, _ = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.5)
+    n_in = len(pcd.points)
+    print(f"[输入] {n_in} 点")
+    # 注意: 统计离群点滤波(SOR)是按"平均邻距"全局判定的, 管子根部在掠射角下点密度骤降,
+    # 整段会被当成离群点删掉(交界处点云消失)。默认用半径滤波, 只删孤立飞点, 不删稀疏面。
+    if args.outlier == "radius":
+        pcd, _ = pcd.remove_radius_outlier(nb_points=args.outlier_min_pts, radius=args.outlier_radius)
+    elif args.outlier == "stat":
+        pcd, _ = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=args.sor_std)
+    print(f"[去离群] 模式={args.outlier}  移除 {n_in - len(pcd.points)} 点 "
+          f"({100 * (n_in - len(pcd.points)) / max(n_in, 1):.1f}%)")
     raw = np.asarray(pcd.points)
     kdtree_raw = o3d.geometry.KDTreeFlann(pcd)
 
@@ -521,7 +536,8 @@ def main():
     # ---------- 3. 圆管 ----------
     above = (~plane_mask) & (plane.dist(pts) > 3 * args.plane_thr)
     cand = ds.select_by_index(np.where(above)[0])
-    labels = np.asarray(cand.cluster_dbscan(eps=args.voxel * 3, min_points=10))
+    eps = args.cluster_eps or max(args.voxel * 4, 2.5)
+    labels = np.asarray(cand.cluster_dbscan(eps=eps, min_points=5))
     if labels.max() < 0:
         sys.exit("平板之上没有找到管子点云")
     big = np.argmax(np.bincount(labels[labels >= 0]))

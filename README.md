@@ -38,6 +38,9 @@ python weld_seam_pipe_plate.py scan.ply --radius 30 --no-vis --screenshot seam.p
 | --- | --- | --- |
 | `--radius` / `--radius-tol` | 无 / 2.0 | 管外半径名义值与容差，强烈建议给出，防止拟到焊脚或倒角 |
 | `--voxel` | 0.5 | 分割用下采样体素 |
+| `--outlier` | radius | 去离群方式。`radius` 只删孤立飞点；`stat` 为统计滤波，会把掠射角下稀疏的管根点云整段删掉，慎用；`none` 不滤 |
+| `--outlier-radius` / `--outlier-min-pts` | 2.0 / 3 | 半径滤波参数 |
+| `--cluster-eps` | max(4·voxel, 2.5) | 管子聚类半径，根部稀疏断开时加大 |
 | `--plane-thr` / `--cyl-thr` | 0.4 / 0.5 | 平面、圆柱 RANSAC 内点阈值 |
 | `--step-deg` | 1.0 | 焊缝输出角度步长 |
 | `--section-thk` / `--section-window` | 0.8 / 15 | 径向截面半厚与取点半径 |
