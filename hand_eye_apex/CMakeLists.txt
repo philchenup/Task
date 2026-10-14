@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.10)
+project(hand_eye_apex CXX)
+set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+add_executable(test_hand_eye_apex src/test_hand_eye_apex.cpp)
+target_include_directories(test_hand_eye_apex PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(test_hand_eye_apex PRIVATE Eigen3::Eigen)
