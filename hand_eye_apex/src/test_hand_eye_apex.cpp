@@ -23,12 +23,12 @@ Eigen::Matrix3d randomRotation(std::mt19937 &rng)
   return Q;
 }
 
-EndEffectorPose poseFromIsometry(const Eigen::Matrix3d &R, const Eigen::Vector3d &t)
+Eigen::Affine3d poseFromIsometry(const Eigen::Matrix3d &R, const Eigen::Vector3d &t)
 {
-  EndEffectorPose pose;
-  pose.R_be = R;
-  pose.t_be = t;
-  return pose;
+  Eigen::Affine3d T = Eigen::Affine3d::Identity();
+  T.linear() = R;
+  T.translation() = t;
+  return T;
 }
 } // namespace
 
@@ -42,13 +42,13 @@ int main()
   const Eigen::Vector3d t_true(0.04, -0.02, 0.08);
   const Eigen::Vector3d apex_base(0.55, 0.10, 0.02);
 
-  std::vector<EndEffectorPose> poses;
+  std::vector<Eigen::Affine3d> poses;
   std::vector<Eigen::Vector3d> apex_camera;
   poses.reserve(12);
   for (int i = 0; i < 12; ++i) {
-    EndEffectorPose pose = poseFromIsometry(randomRotation(rng), Eigen::Vector3d(trans(rng), trans(rng), 0.4 + trans(rng)));
+    Eigen::Affine3d pose = poseFromIsometry(randomRotation(rng), Eigen::Vector3d(trans(rng), trans(rng), 0.4 + trans(rng)));
     // 末端必须在尖点附近，且尖点位于相机前方
-    const Eigen::Vector3d p_e = pose.R_be.transpose() * (apex_base - pose.t_be);
+    const Eigen::Vector3d p_e = pose.inverse() * apex_base;
     const Eigen::Vector3d p_c = R_true.transpose() * (p_e - t_true);
     if (p_c.z() < 0.05) {
       --i;
@@ -88,16 +88,13 @@ int main()
   }
 
   // 共线：相机只沿一条直线平移去看尖点，绕该轴的旋转不可观测
-  std::vector<EndEffectorPose> line_poses;
+  std::vector<Eigen::Affine3d> line_poses;
   std::vector<Eigen::Vector3d> line_cam;
   const Eigen::Matrix3d R_fixed = randomRotation(rng);
   for (int i = 0; i < 6; ++i) {
     const Eigen::Vector3d cam_point(0.0, 0.0, 0.3 + 0.02 * i);
     const Eigen::Vector3d p_e = R_true * cam_point + t_true;
-    EndEffectorPose pose;
-    pose.R_be = R_fixed;
-    pose.t_be = apex_base - R_fixed * p_e;
-    line_poses.push_back(pose);
+    line_poses.push_back(poseFromIsometry(R_fixed, apex_base - R_fixed * p_e));
     line_cam.push_back(cam_point);
   }
   const HandEyeEstimate line = solveEyeInHandFromApex(apex_base, line_poses, line_cam);

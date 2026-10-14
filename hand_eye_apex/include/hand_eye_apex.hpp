@@ -3,7 +3,7 @@
  *
  * 已知
  *   p_B                         三角锥尖点在基座系中的坐标（TCP 触碰得到）
- *   T_BE,i = (R_BE,i, t_BE,i)   第 i 次拍摄时末端在基座系中的位姿
+ *   T_BE,i                      第 i 次拍摄时末端在基座系中的位姿（Affine3d，作用在点上：p_B = T_BE p_E）
  *   p_C,i                       同一尖点在相机系中的坐标
  * 未知
  *   T_EC = (R, t)               把相机系中的点变到末端系：p_E = R p_C + t
@@ -20,17 +20,11 @@
 
 #include <cmath>
 #include <stdexcept>
-#include <string>
 #include <vector>
 
 #include <Eigen/Dense>
+#include <Eigen/Geometry>
 #include <Eigen/SVD>
-
-struct EndEffectorPose
-{
-  Eigen::Matrix3d R_be; // 末端坐标系相对基座的旋转
-  Eigen::Vector3d t_be; // 末端原点在基座系中的位置
-};
 
 struct HandEyeEstimate
 {
@@ -42,16 +36,16 @@ struct HandEyeEstimate
   bool degenerate = false;
 };
 
-inline Eigen::Vector3d apexInEndEffector(const Eigen::Vector3d &apex_base, const EndEffectorPose &pose)
+inline Eigen::Vector3d apexInEndEffector(const Eigen::Vector3d &apex_base, const Eigen::Affine3d &T_be)
 {
-  return pose.R_be.transpose() * (apex_base - pose.t_be);
+  return T_be.inverse() * apex_base;
 }
 
 inline HandEyeEstimate solveEyeInHandFromApex(const Eigen::Vector3d &apex_base,
-                                               const std::vector<EndEffectorPose> &poses,
+                                               const std::vector<Eigen::Affine3d> &T_be,
                                                const std::vector<Eigen::Vector3d> &apex_camera)
 {
-  const std::size_t n = poses.size();
+  const std::size_t n = T_be.size();
   if (n != apex_camera.size()) {
     throw std::invalid_argument("poses and camera points must have the same length");
   }
@@ -63,7 +57,7 @@ inline HandEyeEstimate solveEyeInHandFromApex(const Eigen::Vector3d &apex_base,
   Eigen::Vector3d mean_c = Eigen::Vector3d::Zero();
   Eigen::Vector3d mean_e = Eigen::Vector3d::Zero();
   for (std::size_t i = 0; i < n; ++i) {
-    p_e[i] = apexInEndEffector(apex_base, poses[i]);
+    p_e[i] = apexInEndEffector(apex_base, T_be[i]);
     mean_c += apex_camera[i];
     mean_e += p_e[i];
   }
