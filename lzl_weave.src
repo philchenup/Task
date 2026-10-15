@@ -1,0 +1,94 @@
+&ACCESS RVO1
+&COMMENT 
+DEF lzl_weave ( )
+
+decl e6pos mypoint1,mypoint2,Startp,Finishp
+decl REAL L,Detx,Dety,Detz,a,b,c,realb
+decl int m,p
+decl bool reg,neg
+
+b=5;Amplitude
+a=10;Weavelength(half length)
+reg=true
+neg=false
+;fold MADA
+for  i= 1 to 6
+$gear_jerk[i]=100
+$vel_axis[i]=100
+$acc_axis[i]=100
+endfor
+;ini axis vel
+$vel.cp=0.02
+$acc.cp=5
+$jerk.cp=10
+$vel.ori1=100
+$vel.ori2=100
+$acc.ori1=100
+$acc.ori2=100
+;endfold
+
+;FOLD PTP P4 Vel=10 % PDAT4 Tool[1] Base[0];%{PE}%R 8.3.44,%MKUKATPBASIS,%CMOVE,%VPTP,%P 1:PTP, 2:P4, 3:, 5:10, 7:PDAT4
+$BWDSTART=FALSE
+PDAT_ACT=PPDAT4
+FDAT_ACT=FP4
+BAS(#PTP_PARAMS,10)
+PTP XP4 
+;ENDFOLD
+;FOLD PTP p1 Vel=5 % PDAT3 Tool[1] Base[0];%{PE}%R 8.3.44,%MKUKATPBASIS,%CMOVE,%VPTP,%P 1:PTP, 2:p1, 3:, 5:5, 7:PDAT3
+$BWDSTART=FALSE
+PDAT_ACT=PPDAT3
+FDAT_ACT=Fp1
+BAS(#PTP_PARAMS,5)
+PTP Xp1 
+;ENDFOLD
+Startp=xp1
+mypoint1=xp1
+Detx=xp2.x-xp1.x
+Dety=xp2.y-xp1.y
+Detz=xp2.z-xp1.z
+L=sqrt(Detx*Detx+Dety*Dety+Detz*Detz)
+p=L/2/a;Groups
+$vel.cp=0.02;weld speed
+mypoint1.x=a*Detx/L+b*Dety/L+xp1.x
+mypoint1.y=-b*Detx/L+a*Dety/L+xp1.y
+mypoint1.z=Detz/p+xp1.z
+lin mypoint1
+for m=1 to p 
+if  reg  THEN
+realb = b
+mypoint1.x=(1+2*m)*a*Detx/L-realb*Dety/L+xp1.x
+mypoint1.y=realb*Detx/L+(1+2*m)*a*Dety/L+xp1.y
+mypoint1.z=Detz*m/p+xp1.z
+lin mypoint1
+;wait sec 1
+reg=false
+neg=true
+else
+realb = b
+mypoint1.x=(1+2*m)*a*Detx/L+realb*Dety/L+xp1.x
+mypoint1.y=-realb*Detx/L+(1+2*m)*a*Dety/L+xp1.y
+mypoint1.z=Detz*m/p+xp1.z
+lin mypoint1
+;wait sec 1
+reg=true
+neg=false
+endif
+endfor
+Finishp=xp2
+
+;FOLD PTP P2 Vel=5 % PDAT2 Tool[1] Base[0];%{PE}%R 8.3.44,%MKUKATPBASIS,%CMOVE,%VPTP,%P 1:PTP, 2:P2, 3:, 5:5, 7:PDAT2
+$BWDSTART=FALSE
+PDAT_ACT=PPDAT2
+FDAT_ACT=FP2
+BAS(#PTP_PARAMS,5)
+PTP XP2 
+;ENDFOLD
+
+;FOLD PTP P4 Vel=10 % PDAT5 Tool[1] Base[0];%{PE}%R 8.3.44,%MKUKATPBASIS,%CMOVE,%VPTP,%P 1:PTP, 2:P4, 3:, 5:10, 7:PDAT5
+$BWDSTART=FALSE
+PDAT_ACT=PPDAT5
+FDAT_ACT=FP4
+BAS(#PTP_PARAMS,10)
+PTP XP4 
+;ENDFOLD
+END
