@@ -88,6 +88,16 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr loadCloud(const std::string& path) {
 }
 
 void saveCloud(const std::string& path, const pcl::PointCloud<pcl::PointXYZ>& cloud) {
+  if (cloud.empty()) {
+    std::ofstream out(path);
+    if (!out) {
+      throw std::runtime_error("无法写入点云: " + path);
+    }
+    out << "# .PCD v0.7 - Point Cloud Data file format\n"
+           "VERSION 0.7\nFIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nCOUNT 1 1 1\n"
+           "WIDTH 0\nHEIGHT 1\nVIEWPOINT 0 0 0 1 0 0 0\nPOINTS 0\nDATA binary\n";
+    return;
+  }
   if (pcl::io::savePCDFileBinary(path, cloud) < 0) {
     throw std::runtime_error("无法写入点云: " + path);
   }

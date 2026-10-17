@@ -389,6 +389,8 @@ Features computeLobb(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud,
     Eigen::Vector3d qmax = Eigen::Vector3d::Constant(std::numeric_limits<double>::lowest());
     Eigen::Vector3d resultant = Eigen::Vector3d::Zero();
     int direction_count = 0;
+    std::vector<float> tangent_angles;
+    tangent_angles.reserve(neighbors.size());
     for (const auto& p : neighbors) {
       const Eigen::Vector3d delta = p - origin;
       const Eigen::Vector3d local = axes.transpose() * delta;
@@ -398,6 +400,7 @@ Features computeLobb(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud,
       if (norm > 1e-9) {
         resultant += delta / norm;
         ++direction_count;
+        tangent_angles.push_back(static_cast<float>(std::atan2(local.y(), local.x())));
       }
     }
     const Eigen::Vector3d extent = (qmax - qmin).cwiseMax(1e-9);
@@ -408,7 +411,15 @@ Features computeLobb(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud,
     }
     features.boundary[static_cast<size_t>(i)] =
         static_cast<float>(std::max(extremity(0), extremity(1)));
-    features.corner[static_cast<size_t>(i)] = static_cast<float>(extremity(0) * extremity(1));
+    // 切平面上的最大角空隙。直边大约是半圈，工件角点会空出更大的一扇。
+    if (tangent_angles.size() >= 8) {
+      std::sort(tangent_angles.begin(), tangent_angles.end());
+      float max_gap = tangent_angles.front() + static_cast<float>(2.0 * kPi) - tangent_angles.back();
+      for (size_t k = 1; k < tangent_angles.size(); ++k) {
+        max_gap = std::max(max_gap, tangent_angles[k] - tangent_angles[k - 1]);
+      }
+      features.corner[static_cast<size_t>(i)] = max_gap / static_cast<float>(2.0 * kPi);
+    }
     features.shift[static_cast<size_t>(i)] = static_cast<float>((mean - origin).norm() / radius);
     if (direction_count > 0) {
       features.resultant[static_cast<size_t>(i)] =
@@ -462,9 +473,11 @@ Features computeLobb(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud,
 }
 
 std::optional<Dihedral> fitDihedral(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud,
-                                    pcl::KdTreeFLANN<pcl::PointXYZ>& tree, const Eigen::Vector3d& query,
-                                    float radius, int min_neighbors, float parallel_dot,
-                                    float min_fraction, float max_plane_rms) {
+                                    pcl::KdTreeFLANN<pcl::PointXYZ>& tree,
+                                    const std::vector<Eigen::Vector3f>& normals,
+                                    const std::vector<PointLabel>& labels, const Eigen::Vector3d& query,
+                                    float radius, int min_neighbors, float parallel_dot, float min_fraction,
+                                    float max_plane_rms, float max_surface_gap) {
   pcl::PointXYZ probe;
   probe.x = static_cast<float>(query.x());
   probe.y = static_cast<float>(query.y());
@@ -476,15 +489,31 @@ std::optional<Dihedral> fitDihedral(const pcl::PointCloud<pcl::PointXYZ>::Ptr& c
   }
 
   std::vector<Eigen::Vector3d> points;
+  std::vector<Eigen::Vector3d> norms;
   points.reserve(indices.size());
-  for (size_t k = 0; k < indices.size(); ++k) {
-    if (squared[k] < 1e-12f) {
+  norms.reserve(indices.size());
+  int edge_neighbors = 0;
+  for (int id : indices) {
+    if (normals[static_cast<size_t>(id)].squaredNorm() < 0.25f) {
       continue;
     }
-    const auto& p = cloud->points[static_cast<size_t>(indices[k])];
-    points.emplace_back(p.x, p.y, p.z);
+    const auto& p = cloud->points[static_cast<size_t>(id)];
+    const Eigen::Vector3d position(p.x, p.y, p.z);
+    if ((position - query).squaredNorm() < 1e-12) {
+      continue;
+    }
+    points.push_back(position);
+    norms.push_back(normals[static_cast<size_t>(id)].cast<double>().normalized());
+    const PointLabel label = labels[static_cast<size_t>(id)];
+    if (label == PointLabel::Boundary || label == PointLabel::Corner) {
+      ++edge_neighbors;
+    }
   }
   if (static_cast<int>(points.size()) < min_neighbors) {
+    return std::nullopt;
+  }
+  // 靠外轮廓太近时，两张面不完整，交线会漂。
+  if (edge_neighbors > static_cast<int>(0.22 * points.size())) {
     return std::nullopt;
   }
 
@@ -493,70 +522,48 @@ std::optional<Dihedral> fitDihedral(const pcl::PointCloud<pcl::PointXYZ>::Ptr& c
     mean += p;
   }
   mean /= static_cast<double>(points.size());
-  Eigen::Matrix3d cov = Eigen::Matrix3d::Zero();
-  for (const auto& p : points) {
-    const Eigen::Vector3d r = p - mean;
-    cov += r * r.transpose();
-  }
-  Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> solver(cov);
-  const Eigen::Vector3d axis_u = solver.eigenvectors().col(1);
-  const Eigen::Vector3d axis_v = solver.eigenvectors().col(0);
 
-  // 沿主方向看横截面。折痕的横截面是两支，K-means 会把它们分开；光滑曲面则仍共面。
-  std::vector<Eigen::Vector2d> section;
-  section.reserve(points.size());
-  for (const auto& p : points) {
-    const Eigen::Vector3d r = p - mean;
-    section.emplace_back(r.dot(axis_u), r.dot(axis_v));
-  }
-
-  Eigen::Vector2d section_mean = Eigen::Vector2d::Zero();
-  for (const auto& s : section) {
-    section_mean += s;
-  }
-  section_mean /= static_cast<double>(section.size());
-  size_t far_a = 0;
-  double far_dist = -1.0;
-  for (size_t i = 0; i < section.size(); ++i) {
-    const double dist = (section[i] - section_mean).squaredNorm();
-    if (dist > far_dist) {
-      far_dist = dist;
-      far_a = i;
+  // 按法向分两侧曲面。用 n n^T 的主方向，正负号不影响，竖管侧面也不会被拆成两半。
+  Eigen::Vector3d seed0 = norms.front();
+  size_t opposite = 0;
+  double smallest_alignment = 2.0;
+  for (size_t i = 0; i < norms.size(); ++i) {
+    const double alignment = std::abs(norms[i].dot(seed0));
+    if (alignment < smallest_alignment) {
+      smallest_alignment = alignment;
+      opposite = i;
     }
   }
-  size_t far_b = 0;
-  far_dist = -1.0;
-  for (size_t i = 0; i < section.size(); ++i) {
-    const double dist = (section[i] - section[far_a]).squaredNorm();
-    if (dist > far_dist) {
-      far_dist = dist;
-      far_b = i;
-    }
+  Eigen::Vector3d seed1 = norms[opposite];
+  if (std::abs(seed0.dot(seed1)) > parallel_dot) {
+    return std::nullopt;
   }
-  Eigen::Vector2d c0 = section[far_a];
-  Eigen::Vector2d c1 = section[far_b];
-  std::vector<int> group(section.size(), 0);
-  for (int iter = 0; iter < 16; ++iter) {
-    Eigen::Vector2d sum0 = Eigen::Vector2d::Zero();
-    Eigen::Vector2d sum1 = Eigen::Vector2d::Zero();
+
+  std::vector<int> group(points.size(), 0);
+  for (int iter = 0; iter < 8; ++iter) {
+    Eigen::Matrix3d acc0 = Eigen::Matrix3d::Zero();
+    Eigen::Matrix3d acc1 = Eigen::Matrix3d::Zero();
     int n0 = 0;
     int n1 = 0;
-    for (size_t i = 0; i < section.size(); ++i) {
-      const int g = (section[i] - c1).squaredNorm() < (section[i] - c0).squaredNorm() ? 1 : 0;
+    for (size_t i = 0; i < norms.size(); ++i) {
+      const int g = std::abs(norms[i].dot(seed1)) > std::abs(norms[i].dot(seed0)) ? 1 : 0;
       group[i] = g;
+      const Eigen::Matrix3d outer = norms[i] * norms[i].transpose();
       if (g == 0) {
-        sum0 += section[i];
+        acc0 += outer;
         ++n0;
       } else {
-        sum1 += section[i];
+        acc1 += outer;
         ++n1;
       }
     }
     if (n0 == 0 || n1 == 0) {
       return std::nullopt;
     }
-    c0 = sum0 / static_cast<double>(n0);
-    c1 = sum1 / static_cast<double>(n1);
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> solver0(acc0);
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> solver1(acc1);
+    seed0 = solver0.eigenvectors().col(2);
+    seed1 = solver1.eigenvectors().col(2);
   }
 
   int n0 = 0;
@@ -630,6 +637,19 @@ std::optional<Dihedral> fitDihedral(const pcl::PointCloud<pcl::PointXYZ>::Ptr& c
   const Eigen::Vector3d rhs(n_a.dot(c_a), n_b.dot(c_b), direction.dot(query));
   const Eigen::Vector3d origin = system.colPivHouseholderQr().solve(rhs);
   if (!origin.allFinite() || (origin - query).norm() > radius) {
+    return std::nullopt;
+  }
+  double nearest0 = std::numeric_limits<double>::max();
+  double nearest1 = std::numeric_limits<double>::max();
+  for (size_t i = 0; i < points.size(); ++i) {
+    const double gap = (points[i] - origin).norm();
+    if (group[i] == 0) {
+      nearest0 = std::min(nearest0, gap);
+    } else {
+      nearest1 = std::min(nearest1, gap);
+    }
+  }
+  if (nearest0 > max_surface_gap || nearest1 > max_surface_gap) {
     return std::nullopt;
   }
 
@@ -1226,10 +1246,13 @@ ExtractResult extractCurvedSeam(const pcl::PointCloud<pcl::PointXYZ>::Ptr& input
     }
   }
 
-  // 第三层：边界点里，包围盒两个切向都贴近盒面的是角点。
+  // 第三层：边界上角空隙明显大于直边（约 0.5）的点是角点。不改折痕，避免把焊缝端点从交线里抠掉。
   for (int i = 0; i < n; ++i) {
-    if (result.labels[static_cast<size_t>(i)] == PointLabel::Boundary &&
-        features.corner[static_cast<size_t>(i)] > 0.22f && features.boundary[static_cast<size_t>(i)] > 0.40f) {
+    if (result.labels[static_cast<size_t>(i)] == PointLabel::Crease) {
+      continue;
+    }
+    if (features.corner[static_cast<size_t>(i)] > 0.62f && features.boundary[static_cast<size_t>(i)] > 0.15f &&
+        features.normal_variation[static_cast<size_t>(i)] < 0.06f) {
       result.labels[static_cast<size_t>(i)] = PointLabel::Corner;
     }
   }
@@ -1245,13 +1268,22 @@ ExtractResult extractCurvedSeam(const pcl::PointCloud<pcl::PointXYZ>::Ptr& input
     ++crease_seen;
     const auto& p = result.cloud->points[static_cast<size_t>(i)];
     const Eigen::Vector3d query(p.x, p.y, p.z);
-    const std::optional<Dihedral> dihedral =
-        fitDihedral(result.cloud, tree, query, result.feature_radius, params.min_neighbors,
-                    params.parallel_normal_dot, params.min_cluster_fraction, max_plane_rms);
+    const float surface_gap = std::max(2.2f * result.median_nn, 0.28f * result.feature_radius);
+    auto dihedral = fitDihedral(result.cloud, tree, normals, result.labels, query, result.feature_radius,
+                                params.min_neighbors, params.parallel_normal_dot, params.min_cluster_fraction,
+                                max_plane_rms, surface_gap);
     if (!dihedral) {
       // 聚类把它分到折痕，但邻域并不是两张相交曲面，改回平面，避免把弯曲板面当成焊缝。
       result.labels[static_cast<size_t>(i)] = PointLabel::Plane;
       continue;
+    }
+    // 再在交点上拟合一次，把肩部点收到真正的交线上。
+    if (auto refined = fitDihedral(result.cloud, tree, normals, result.labels, dihedral->origin,
+                                   result.feature_radius, params.min_neighbors, params.parallel_normal_dot,
+                                   params.min_cluster_fraction, max_plane_rms, surface_gap)) {
+      if ((refined->origin - dihedral->origin).norm() < 0.45 * result.feature_radius) {
+        dihedral = std::move(refined);
+      }
     }
     std::vector<int> nearest(1);
     std::vector<float> nearest_d2(1);
