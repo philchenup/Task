@@ -5,13 +5,16 @@
 #include <pcl/io/ply_io.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
+#include <pcl/visualization/pcl_visualizer.h>
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -20,6 +23,8 @@ struct Options {
   std::string input;
   std::string output = "output";
   std::string demo;
+  bool show = false;
+  bool show_set = false;
   lobb::ExtractParams params;
 };
 
@@ -34,7 +39,9 @@ void printUsage() {
       << "可选参数:\n"
       << "  --radius <值>    LOBB 邻域半径，默认按点间距自动估计\n"
       << "  --voxel <值>     体素降采样边长，默认不降采样\n"
-      << "  --no-sor         关闭统计离群点滤波\n";
+      << "  --no-sor         关闭统计离群点滤波\n"
+      << "  --show           弹出 PCL 窗口显示分类点云和焊缝\n"
+      << "  --no-show        不弹窗（终端里默认会弹）\n";
 }
 
 bool parseArgs(int argc, char** argv, Options& options) {
@@ -61,6 +68,12 @@ bool parseArgs(int argc, char** argv, Options& options) {
       options.params.voxel = std::stof(need(arg));
     } else if (arg == "--no-sor") {
       options.params.statistical_filter = false;
+    } else if (arg == "--show") {
+      options.show = true;
+      options.show_set = true;
+    } else if (arg == "--no-show") {
+      options.show = false;
+      options.show_set = true;
     } else {
       throw std::runtime_error("无法识别的参数: " + arg);
     }
@@ -289,6 +302,74 @@ void saveOutputs(const std::filesystem::path& directory, const lobb::ExtractResu
   writePreview(directory / "preview.ppm", result);
 }
 
+pcl::PointXYZ toPoint(const Eigen::Vector3d& position) {
+  pcl::PointXYZ point;
+  point.x = static_cast<float>(position.x());
+  point.y = static_cast<float>(position.y());
+  point.z = static_cast<float>(position.z());
+  return point;
+}
+
+// 灰平面、蓝边界、红折痕、橙角点，绿线是焊缝，紫色箭头是焊枪送进方向。按 q 关闭。
+void showResult(const lobb::ExtractResult& result) {
+  const char* display = std::getenv("DISPLAY");
+  const char* wayland = std::getenv("WAYLAND_DISPLAY");
+  if ((display == nullptr || display[0] == '\0') && (wayland == nullptr || wayland[0] == '\0')) {
+    std::cout << "没有图形界面，跳过点云可视化。\n";
+    return;
+  }
+
+  pcl::visualization::PCLVisualizer viewer("LOBB 曲面焊缝");
+  viewer.setBackgroundColor(1.0, 1.0, 1.0);
+  viewer.addText("灰平面  蓝边界  红折痕  橙角点  绿焊缝  紫箭头=焊枪方向    按 q 关闭", 12, 16, 14, 0.15,
+                 0.15, 0.15, "legend");
+
+  auto colored = colorByLabel(result);
+  pcl::visualization::PointCloudColorHandlerRGBField<pcl::PointXYZRGB> rgb(colored);
+  viewer.addPointCloud<pcl::PointXYZRGB>(colored, rgb, "classes");
+  viewer.setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 2, "classes");
+
+  const float arrow = std::max(4.f * result.median_nn, 0.35f * result.feature_radius);
+  for (size_t seam_index = 0; seam_index < result.seams.size(); ++seam_index) {
+    const auto& seam = result.seams[seam_index];
+    const int count = static_cast<int>(seam.poses.size());
+    for (int i = 0; i < count; ++i) {
+      const int next = i + 1;
+      const bool has_next = next < count || seam.closed;
+      if (!has_next) {
+        continue;
+      }
+      const auto& a = seam.poses[static_cast<size_t>(i)].position;
+      const auto& b = seam.poses[static_cast<size_t>(next % count)].position;
+      const std::string line_id = "seam_line_" + std::to_string(seam_index) + "_" + std::to_string(i);
+      viewer.addLine(toPoint(a), toPoint(b), 0.05, 0.72, 0.22, line_id);
+      viewer.setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 3, line_id);
+    }
+
+    const int stride = std::max(1, count / 18);
+    for (int i = 0; i < count; i += stride) {
+      const auto& pose = seam.poses[static_cast<size_t>(i)];
+      const Eigen::Vector3d tail = pose.position - pose.approach * static_cast<double>(arrow);
+      const std::string arrow_id = "approach_" + std::to_string(seam_index) + "_" + std::to_string(i);
+      viewer.addArrow(toPoint(pose.position), toPoint(tail), 0.62, 0.12, 0.72, false, arrow_id);
+    }
+  }
+
+  viewer.addCoordinateSystem(std::max(10.f * result.median_nn, 1.f));
+  viewer.resetCamera();
+  std::cout << "已打开可视化窗口，按 q 关闭。\n";
+  viewer.spin();
+}
+
+bool wantShow(const Options& options) {
+  if (options.show_set) {
+    return options.show;
+  }
+  const char* display = std::getenv("DISPLAY");
+  const bool desktop = display != nullptr && display[0] != '\0';
+  return desktop && isatty(STDOUT_FILENO);
+}
+
 int runDemo(const Options& options) {
   lobb::DemoCloud demo;
   if (options.demo == "sine") {
@@ -311,13 +392,18 @@ int runDemo(const Options& options) {
   }
   const lobb::CurveScore score = lobb::scoreCurve(seam_points, demo.ground_truth, demo.coverage_distance);
   std::cout << "相对真值: 平均 " << score.mean << "，P90 " << score.p90 << "，覆盖率 " << score.coverage << "\n";
-  if (score.mean > demo.max_mean_error || score.p90 > demo.max_p90_error || score.coverage < demo.min_coverage) {
+  const bool passed = score.mean <= demo.max_mean_error && score.p90 <= demo.max_p90_error &&
+                      score.coverage >= demo.min_coverage;
+  if (passed) {
+    std::cout << "演示通过。结果写在 " << options.output << "\n";
+  } else {
     std::cout << "演示未达到精度要求（平均 <= " << demo.max_mean_error << "，P90 <= " << demo.max_p90_error
               << "，覆盖率 >= " << demo.min_coverage << "）。\n";
-    return 1;
   }
-  std::cout << "演示通过。结果写在 " << options.output << "\n";
-  return 0;
+  if (wantShow(options)) {
+    showResult(result);
+  }
+  return passed ? 0 : 1;
 }
 
 }  // namespace
@@ -337,9 +423,15 @@ int main(int argc, char** argv) {
     saveOutputs(options.output, result);
     if (result.seams.empty()) {
       std::cout << "没有提取到焊缝。可以增大 --radius，使邻域同时覆盖焊缝两侧。\n";
+      if (wantShow(options)) {
+        showResult(result);
+      }
       return 1;
     }
     std::cout << "结果写在 " << options.output << "\n";
+    if (wantShow(options)) {
+      showResult(result);
+    }
     return 0;
   } catch (const std::exception& error) {
     std::cerr << error.what() << "\n";

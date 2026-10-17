@@ -33,8 +33,10 @@ cmake --build build -j
 
 # 自己的点云。半径要能同时看到焊缝两侧，默认按点间距自动估计。
 ./build/lobb_weld --input workpiece.pcd --output output/workpiece
-./build/lobb_weld --input workpiece.ply --voxel 1.0 --radius 8 --output output/workpiece
+./build/lobb_weld --input workpiece.ply --voxel 1.0 --radius 8 --show --output output/workpiece
 ```
+
+有图形界面时，在终端里运行会自动弹出 PCL 窗口：灰平面、蓝边界、红折痕、橙角点、绿色焊缝和紫色焊枪方向。按 `q` 关闭。`--no-show` 只写文件。
 
 `--radius` 和 `--voxel` 与点云使用同一单位。点太密时先用 `--voxel` 降到大约一个焊缝宽度里有若干个点。
 

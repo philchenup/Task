@@ -9,7 +9,7 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-find_package(PCL 1.10 REQUIRED COMPONENTS common io filters kdtree search)
+find_package(PCL 1.10 REQUIRED COMPONENTS common io filters kdtree search visualization)
 
 add_executable(lobb_weld
   src/main.cpp
