@@ -18,6 +18,7 @@
 #include <QListWidget>
 #include <vtkGenericOpenGLRenderWindow.h>
 #include <QTimer>
+#include "CylindricalHoleDetector.h"
 
 struct SphereData {
     double X, Y, Z;       // Œª÷√
@@ -94,9 +95,17 @@ public:
 
     void updateSpinboxes(const SphereData& data);
 
+    void updateCadSpinboxes(const SphereData& data);
+
     void loadVisionConfig(const std::string& visionconfig_path);
 
     void autoAddGraspPoint(const SphereData& data);
+
+    void autoCadAddGraspPoint(const SphereData& data);
+
+    Eigen::Quaterniond dirToQuat(const gp_Dir& direction);
+
+    void showPcd(const ct::Cloud::Ptr& cloud_in, const pcl::PolygonMesh mesh_in, const std::vector<HoleInfo>& holeInfo, int coorSize);
 
     Eigen::Affine3d readQuatPoseFromJson(const std::string& filepath);
 private slots:
@@ -116,7 +125,11 @@ private slots:
 
     void onListItemClicked(QListWidgetItem* item);
 
+    void onCadListItemClicked(QListWidgetItem* item);
+
     void timer1Handle();
+
+    void timer2Handle();
 
     void onDeleteActionTriggered();
 
@@ -126,6 +139,17 @@ private slots:
 
     void on_updateTcpBtn_clicked();
 
+    /*CAD model*/
+    void on_handExecBtn_clicked();
+
+    void on_pcdProcessBtn_clicked();
+
+    void on_paraSaveBtn_clicked();
+
+    void on_loadCadModelBtn_clicked();
+
+    void on_loadCadTcpBtn_clicked();
+
 signals:
     void camTrigger();
 
@@ -134,8 +158,12 @@ private:
 
     void activateVtkWidget(QVTKOpenGLNativeWidget* widget);
 
+    void activateVisibleVtkWidgets();
+
     int max_count = 0;
     int last_max_count = 0;
+
+    bool IsFlushFirst = false;
 
     vtkNew<vtkActor> cones;
 
@@ -165,20 +193,28 @@ private:
 
     QTimer* m_timer_1;
 
+    QTimer* m_timer_2;
+
     MathUtils* mu;
 
     vtkNew<vtkRenderer> render_tool;
 
     vtkNew<vtkRenderer> renderer_grasp;
 
+    vtkNew<vtkRenderer> renderer_cad_grasp;
+
     pcl::visualization::PCLVisualizer::Ptr m_viewer;
 
     ct::Cloud::Ptr tool_cloud;
+
+    ct::Cloud::Ptr cad_cloud;
 
     ct::Cloud::Ptr post_cloud;
 
     pcl::PolygonMesh m_mesh;
 
+    std::vector<HoleInfo> holes;
+    
     Eigen::Affine3f transform = Eigen::Affine3f::Identity();
 
     Ui::MakeTool* ui;

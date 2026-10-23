@@ -45,6 +45,8 @@
 #include <vtkOpenGLRenderWindow.h>
 #include <vtkOpenGLState.h>
 #include "utils/utils.h"
+#include "tool/CylindricalHoleDetector.h"
+#include "tool/HPR.h"
 
 namespace {
 
@@ -92,6 +94,7 @@ Eigen::Matrix4d graspInCamMatrix;
 Eigen::Matrix4d multiGraspInCamMatrix;
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SphereData, X, Y, Z, w, x, y, z)
+
 
 auto printTransformCallback = [](vtkObject* caller, long unsigned int eventId, void* clientData, void* callData) {
     auto actor = static_cast<vtkActor*>(clientData);
@@ -148,9 +151,11 @@ auto printTransformCallback_multi = [](vtkObject* caller, long unsigned int even
 MakeTool::MakeTool(QWidget* parent) :CustomDialog(parent),
 ui(new Ui::MakeTool),
 tool_cloud(new ct::Cloud()),
+cad_cloud(new ct::Cloud()),
 post_cloud(new ct::Cloud()),
 m_timer(new QTimer(this)),
 m_timer_1(new QTimer(this)),
+m_timer_2(new QTimer(this)),
 mu(new MathUtils),
 currentSelectedActor(nullptr),
 m_viewer(nullptr),
@@ -183,23 +188,26 @@ current_item(nullptr)
         m_timer_1->stop();
         });
     connect(ui->step2Btn, &QPushButton::clicked, this, [this]() {
-        ui->qvtkWidget->releaseMouse();
         ui->stackedWidget->setCurrentIndex(1);
         m_timer->start(100);
         m_timer_1->stop();
-        QTimer::singleShot(0, this, [this]() { activateVtkWidget(ui->toolqvtkWidget); });
     });
     connect(ui->step3Btn, &QPushButton::clicked, this, [this]() {
-        ui->toolqvtkWidget->releaseMouse();
         ui->stackedWidget->setCurrentIndex(2);
         m_timer->stop();
         m_timer_1->start(100);
-        QTimer::singleShot(0, this, [this]() { activateVtkWidget(ui->qvtkWidget); });
     });
+    connect(ui->stackedWidget, &QStackedWidget::currentChanged, this, [this](int) { activateVisibleVtkWidgets(); });
+    connect(ui->toolSettingWidget, &QStackedWidget::currentChanged, this, [this](int) { activateVisibleVtkWidgets(); });
+    connect(ui->cadSettingWidget, &QStackedWidget::currentChanged, this, [this](int) { activateVisibleVtkWidgets(); });
 
     connect(ui->eulerTcpBtn, &QPushButton::clicked, this, [&]() { ui->tcpStackWidget->setCurrentIndex(0); });
     connect(ui->quatTcpBtn, &QPushButton::clicked, this, [&]() { ui->tcpStackWidget->setCurrentIndex(1); });
     connect(ui->rotvecTcpBtn, &QPushButton::clicked, this, [&]() { ui->tcpStackWidget->setCurrentIndex(2); });
+
+    connect(ui->cadeulerTcpBtn, &QPushButton::clicked, this, [&]() { ui->cadtcpStackWidget->setCurrentIndex(0); });
+    connect(ui->cadquatTcpBtn, &QPushButton::clicked, this, [&]() { ui->cadtcpStackWidget->setCurrentIndex(1); });
+    connect(ui->cadrotvecTcpBtn, &QPushButton::clicked, this, [&]() { ui->cadtcpStackWidget->setCurrentIndex(2); });
 
     connect(ui->gEulerBtn, &QPushButton::clicked, this, [&]() { ui->gStackWidget->setCurrentIndex(0); });
     connect(ui->gQuatBtn, &QPushButton::clicked, this, [&]() { ui->gStackWidget->setCurrentIndex(1); });
@@ -209,9 +217,29 @@ current_item(nullptr)
     connect(ui->quatcapBtn, &QPushButton::clicked, this, [&]() { ui->capStackWidget->setCurrentIndex(1); });
     connect(ui->rotveccapBtn, &QPushButton::clicked, this, [&]() { ui->capStackWidget->setCurrentIndex(2); });
 
+    connect(ui->cadcapEulerBtn, &QPushButton::clicked, this, [&]() { ui->cadcapStackWidget->setCurrentIndex(0); });
+    connect(ui->cadquatcapBtn, &QPushButton::clicked, this, [&]() { ui->cadcapStackWidget->setCurrentIndex(1); });
+    connect(ui->cadrotveccapBtn, &QPushButton::clicked, this, [&]() { ui->cadcapStackWidget->setCurrentIndex(2); });
+
     connect(ui->IsExistTcpBtn, &QPushButton::clicked, this, [&]() { ui->tcpExistWidget->setCurrentIndex(0); });
     connect(ui->NotExistTcpBtn, &QPushButton::clicked, this, [&]() { ui->tcpExistWidget->setCurrentIndex(1); });
 
+	ui->toolSettingWidget->setContentsMargins(0, 0, 0, 0);
+	ui->toolSettingWidget->setCurrentIndex(0);
+    connect(ui->makeToolComb, QOverload<int>::of(&QComboBox::currentIndexChanged),
+        ui->toolSettingWidget, &QStackedWidget::setCurrentIndex);
+
+    connect(ui->proTypeComb, QOverload<int>::of(&QComboBox::currentIndexChanged),
+        ui->proTypeWidget, &QStackedWidget::setCurrentIndex);
+
+
+    ui->cadSettingWidget->setContentsMargins(0, 0, 0, 0);
+    ui->cadSettingWidget->setCurrentIndex(0);
+    connect(ui->cadStep1Btn, &QPushButton::clicked, this, [&]() { ui->cadSettingWidget->setCurrentIndex(0); });
+    connect(ui->cadStep2Btn, &QPushButton::clicked, this, [&]() { ui->cadSettingWidget->setCurrentIndex(1); });
+
+    ui->cadcapStackWidget->setContentsMargins(0, 0, 0, 0);
+    ui->cadtcpStackWidget->setContentsMargins(0, 0, 0, 0);
 
     ui->IsExistTcpBtn->setChecked(true);
     ui->tcpExistWidget->setCurrentIndex(0);
@@ -229,8 +257,13 @@ current_item(nullptr)
 
     connect(ui->graspListWidget, &QListWidget::itemClicked, this, &MakeTool::onListItemClicked);
 
+    connect(ui->cadGraspListWidget, &QListWidget::itemClicked, this, &MakeTool::onCadListItemClicked);
+
+    //connect(ui->globalOffCheck, &QCheckBox::toggled, this, [this](bool checked) {startGlobalChange = checked; });
+
     connect(m_timer, &QTimer::timeout, this, &MakeTool::timerHandle);
     connect(m_timer_1, &QTimer::timeout, this, &MakeTool::timer1Handle);
+    connect(m_timer_2, &QTimer::timeout, this, &MakeTool::timer2Handle);
 
     ui->graspListWidget->setContextMenuPolicy(Qt::CustomContextMenu);
 
@@ -251,6 +284,11 @@ MakeTool::~MakeTool()
         delete m_timer_1;
     }
 
+    m_timer_2->stop();
+    if (m_timer_2 != nullptr) {
+        delete m_timer_2;
+    }
+
     if (ui != nullptr) {
         delete ui;
     }
@@ -261,11 +299,27 @@ MakeTool::~MakeTool()
 
 void MakeTool::initVtkWindow() {
 
+    /*vtkNew<vtkRenderer> renderer;
+    vtkNew<vtkGenericOpenGLRenderWindow> renderWindow;
+    renderWindow->AddRenderer(renderer);
+    ui->cadqvtkWidget->setRenderWindow(renderWindow);
+    m_viewer.reset(new pcl::visualization::PCLVisualizer(renderer, renderWindow, "viewer", false));
+    m_viewer->setupInteractor(ui->cadqvtkWidget->interactor(), ui->cadqvtkWidget->renderWindow());
+    m_viewer->setBackgroundColor(0.8, 0.8, 0.8);
+    m_viewer->resetCamera();
+    ui->cadqvtkWidget->update();*/
+
+    ui->cadqvtkWidget->setEnabled(true);
+    ui->cadqvtkWidget->setFocusPolicy(Qt::StrongFocus);
+    ui->cadqvtkWidget->renderWindow()->AddRenderer(renderer_cad_grasp);
+    ui->cadqvtkWidget->installEventFilter(new VtkWidgetGlStateFilter(ui->cadqvtkWidget));
+    vtkNew<mySWInteractorStyle> style_cad;
+    ui->cadqvtkWidget->interactor()->SetInteractorStyle(style_cad);
+
     ui->toolqvtkWidget->setEnabled(true);
     ui->toolqvtkWidget->setFocusPolicy(Qt::StrongFocus);
     ui->toolqvtkWidget->renderWindow()->AddRenderer(render_tool);
     ui->toolqvtkWidget->installEventFilter(new VtkWidgetGlStateFilter(ui->toolqvtkWidget));
-
     // 控件自己已经创建并绑定了 QVTKInteractor。这里控件还在隐藏页，
     // 再调用 SetRenderWindow / Initialize 会立刻 Render，把 FBO 建到错误的上下文上。
     vtkNew<mySWInteractorStyle> style;
@@ -275,9 +329,8 @@ void MakeTool::initVtkWindow() {
     ui->qvtkWidget->setFocusPolicy(Qt::StrongFocus);
     ui->qvtkWidget->renderWindow()->AddRenderer(renderer_grasp);
     ui->qvtkWidget->installEventFilter(new VtkWidgetGlStateFilter(ui->qvtkWidget));
-
-    vtkNew<mySWInteractorStyle> styleGrasp;
-    ui->qvtkWidget->interactor()->SetInteractorStyle(styleGrasp);
+    vtkNew<mySWInteractorStyle> style_1;
+    ui->qvtkWidget->interactor()->SetInteractorStyle(style_1);
 
     transformCallback_multi->SetCallback(printTransformCallback_multi);
 }
@@ -312,6 +365,18 @@ void MakeTool::activateVtkWidget(QVTKOpenGLNativeWidget* widget)
 
     widget->renderWindow()->Render();
     widget->update();
+}
+
+void MakeTool::activateVisibleVtkWidgets()
+{
+    ui->cadqvtkWidget->releaseMouse();
+    ui->toolqvtkWidget->releaseMouse();
+    ui->qvtkWidget->releaseMouse();
+    QTimer::singleShot(0, this, [this]() {
+        activateVtkWidget(ui->cadqvtkWidget);
+        activateVtkWidget(ui->toolqvtkWidget);
+        activateVtkWidget(ui->qvtkWidget);
+    });
 }
 
 void MakeTool::updateGraspCloudActor()
@@ -754,6 +819,42 @@ void MakeTool::timer1Handle() {
     updateSpinboxes(data);
 }
 
+void MakeTool::timer2Handle() {
+
+    QListWidgetItem* item = nullptr;
+    for (int i = 0; i < ui->cadGraspListWidget->count(); ++i) {
+        if (ui->cadGraspListWidget->item(i) == current_item) {
+            item = current_item;
+            break;
+        }
+    }
+    if (!item) {
+        current_item = nullptr;
+        return;
+    }
+
+    Eigen::Matrix3d rotation_matrix = multiGraspInCamMatrix.block<3, 3>(0, 0);
+    Eigen::Quaterniond quaternion = Eigen::Quaterniond(rotation_matrix);
+
+    // if (quaternion.w() == 1 && quaternion.x() == 0 && quaternion.y() == 0 && quaternion.z() == 0) return;
+
+    SphereData data;
+    data.X = multiGraspInCamMatrix(0, 3);
+    data.Y = multiGraspInCamMatrix(1, 3);
+    data.Z = multiGraspInCamMatrix(2, 3);
+
+    data.w = quaternion.w();
+    data.x = quaternion.x();
+    data.y = quaternion.y();
+    data.z = quaternion.z();
+
+    QVariantList pose;
+    pose << data.X << data.Y << data.Z << data.w << data.x << data.y << data.z;
+
+    current_item->setData(GRASP_DATA_ROLE, pose);
+    updateCadSpinboxes(data);
+}
+
 void MakeTool::on_updateTcpBtn_clicked() {
     // Flange2Tcp
     Eigen::Affine3d cam2target = Eigen::Affine3d::Identity();
@@ -849,6 +950,32 @@ void MakeTool::autoAddGraspPoint(const SphereData& data) {
 
     renderer_grasp->ResetCamera();
     ui->qvtkWidget->renderWindow()->Render();
+}
+
+void MakeTool::autoCadAddGraspPoint(const SphereData& data) {
+    int count = ui->cadGraspListWidget->count();
+
+    vtkNew<vtkActor> new_actor;
+    createSphereActor(data, new_actor);
+
+    if (count == 0 && cadMeshActor != nullptr) {
+        renderer_cad_grasp->AddActor(cadMeshActor);
+    }
+    renderer_cad_grasp->AddActor(new_actor);
+    allActors.push_back(new_actor);
+
+    auto* item = new QListWidgetItem(QString(u8"GraspPoint_%1").arg(count + 1));
+    item->setFlags(item->flags() | Qt::ItemIsDragEnabled | Qt::ItemIsSelectable | Qt::ItemIsEnabled);
+
+    item->setData(ACTOR_POINTER_ROLE, QVariant::fromValue<void*>(new_actor));
+    item->setData(GRASP_DATA_ROLE, QVariant::fromValue(data));
+
+    ui->cadGraspListWidget->addItem(item);
+    ui->cadGraspListWidget->setCurrentItem(item);
+    onCadListItemClicked(item);
+
+    renderer_cad_grasp->ResetCamera();
+    ui->cadqvtkWidget->renderWindow()->Render();
 }
 
 void MakeTool::on_newGraspBtn_clicked() {
@@ -999,6 +1126,45 @@ void MakeTool::onListItemClicked(QListWidgetItem* item) {
     ui->qvtkWidget->renderWindow()->Render();
 }
 
+void MakeTool::onCadListItemClicked(QListWidgetItem* item) {
+    if (!item) return;
+
+    if (!m_timer_2->isActive()) {
+        m_timer_2->start(100);
+    }
+
+    if (currentSelectedActor) {
+        currentSelectedActor->GetProperty()->SetColor(1.0, 1.0, 1.0); // White
+    }
+
+    for (auto& actor : allActors) {
+        actor->SetPickable(0);
+    }
+    current_item = item;
+    QVariant actorVar = item->data(ACTOR_POINTER_ROLE);
+    if (!actorVar.isNull()) {
+        vtkActor* clickedActor = static_cast<vtkActor*>(actorVar.value<void*>());
+        if (clickedActor) {
+            clickedActor->GetProperty()->SetColor(1.0, 0.0, 0.0);
+            currentSelectedActor = clickedActor;
+            clickedActor->SetPickable(1);
+        }
+    }
+
+    transformCallback_multi->SetClientData(currentSelectedActor);
+    if (renderer_cad_grasp) {
+        renderer_cad_grasp->RemoveObserver(transformCallback_multi);
+        renderer_cad_grasp->AddObserver(vtkCommand::EndEvent, transformCallback_multi);
+    }
+
+    QVariant dataVar = item->data(GRASP_DATA_ROLE);
+    if (!dataVar.isNull()) {
+        SphereData data = dataVar.value<SphereData>();
+        updateCadSpinboxes(data);
+    }
+    ui->cadqvtkWidget->renderWindow()->Render();
+}
+
 void MakeTool::updateSpinboxes(const SphereData& data) {
     ui->gpointXspin->blockSignals(true);
     ui->gpointYspin->blockSignals(true);
@@ -1023,6 +1189,32 @@ void MakeTool::updateSpinboxes(const SphereData& data) {
     ui->gpointxspin->blockSignals(false);
     ui->gpointyspin->blockSignals(false);
     ui->gpointzspin->blockSignals(false);
+}
+
+void MakeTool::updateCadSpinboxes(const SphereData& data) {
+    ui->cadXSpin->blockSignals(true);
+    ui->cadYSpin->blockSignals(true);
+    ui->cadZSpin->blockSignals(true);
+    ui->cadwSpin->blockSignals(true);
+    ui->cadxSpin->blockSignals(true);
+    ui->cadySpin->blockSignals(true);
+    ui->cadzSpin->blockSignals(true);
+
+    ui->cadXSpin->setValue(data.X);
+    ui->cadYSpin->setValue(data.Y);
+    ui->cadZSpin->setValue(data.Z);
+    ui->cadwSpin->setValue(data.w);
+    ui->cadxSpin->setValue(data.x);
+    ui->cadySpin->setValue(data.y);
+    ui->cadzSpin->setValue(data.z);
+
+    ui->cadXSpin->blockSignals(false);
+    ui->cadYSpin->blockSignals(false);
+    ui->cadZSpin->blockSignals(false);
+    ui->cadwSpin->blockSignals(false);
+    ui->cadxSpin->blockSignals(false);
+    ui->cadySpin->blockSignals(false);
+    ui->cadzSpin->blockSignals(false);
 }
 
 void MakeTool::onDeleteActionTriggered()
@@ -1236,6 +1428,151 @@ void MakeTool::loadVisionConfig(const std::string& toolkit_path) {
     file.close();
 
     return;
+}
+
+void MakeTool::showPcd(const ct::Cloud::Ptr& cloud_in, const pcl::PolygonMesh mesh_in, const std::vector<HoleInfo>& holeInfo, int coorSize) {
+    pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_out(new pcl::PointCloud<pcl::PointXYZRGB>);
+    pcl::copyPointCloud(*cloud_in, *cloud_out);
+
+    m_viewer->removeAllCoordinateSystems();
+    m_viewer->removeAllPointClouds();
+    m_viewer->removeAllShapes();
+    m_viewer->addPointCloud(cloud_out, "cloud");
+
+    if (ui->showMeshCheck->isChecked() && !mesh_in.polygons.empty()) {
+        m_viewer->addPolygonMesh(mesh_in, "mesh");
+    }
+
+    // m_viewer->setPointCloudRenderingProperties( pcl::visualization::PCL_VISUALIZER_COLOR, 0, 0.2, 0.2, "mesh");
+
+    m_viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR, 0, 1, 0, "cloud");
+    m_viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 3, "cloud");
+    m_viewer->resetCamera();
+
+    for (std::size_t i = 0; i < holeInfo.size(); ++i) {
+        const HoleInfo& h = holeInfo[i];
+        std::string id = "coord_" + std::to_string(i + 1);
+        m_viewer->addCoordinateSystem(
+            50,
+            h.position.X(),   // x
+            h.position.Y(),   // y
+            h.position.Z() + ui->ignoreHoleDepthCheck->isChecked() ? 0.0 : h.depth_mm,   // z
+            id);
+    }
+
+    ui->cadqvtkWidget->renderWindow()->Render();
+    ui->cadqvtkWidget->update();
+}
+
+/*CAD model process*/
+void MakeTool::on_handExecBtn_clicked() {
+
+    std::string step_path = ui->cadModelPathEdit->text().toStdString();
+    double diameter = ui->holeDiamSpin->value();
+    double tolerance = 0.1;
+    double height = ui->holeHeightSpin->value();
+    if (step_path.empty() || diameter <= 0.0) {
+        printE("Input Cad para is wrong!");
+        return;
+    }
+
+    ct::TicToc ticToc;
+    ticToc.tic();
+
+    CylindricalHoleDetector detector(step_path, diameter, tolerance);
+    detector.setMeshDeflection(1.0);
+    detector.setSampleCount(ui->samplePointNumSpin->value());
+    if (!detector.process()) {
+        printE("Cad Model analysis failed!");
+        return;
+    }
+    float time_use = ticToc.toc();
+
+    printI(tr("CAD model analysis and sampling done, take time %1 ms.").arg(time_use));
+
+    cad_cloud = detector.pointCloud();
+    holes = detector.holes();
+    m_mesh = detector.polyMesh();
+
+    initMesh(m_mesh, cadMeshActor);
+    cadMeshActor->SetPickable(0);
+
+    ui->cadGraspListWidget->clear();
+    for (auto hole_dire : holes) {
+        SphereData data;
+        data.X = hole_dire.position.X();
+        data.Y = hole_dire.position.Y();
+        data.Z = hole_dire.position.Z();
+        Eigen::Quaterniond q = dirToQuat(hole_dire.direction);
+        data.w = q.w();
+        data.x = q.x();
+        data.y = q.y();
+        data.z = q.z();
+        autoCadAddGraspPoint(data);
+    }
+
+    // if(!cad_cloud->empty() && holes.size() > 0) this->showPcd(cad_cloud, m_mesh, holes, ui->coordinateSizeSpin->value());
+}
+
+void MakeTool::on_loadCadModelBtn_clicked() {
+    QString filepath = QFileDialog::getOpenFileName(this, tr("Get CAD Model"), "", "CAD (*.step | *.stp)");
+    if (filepath.isEmpty()) {
+        printE("Load CAD Model Path File Failed!");
+        return;
+    }
+    ui->cadModelPathEdit->setText(filepath);
+    return;
+}
+
+void MakeTool::on_pcdProcessBtn_clicked() {
+    if (cad_cloud->empty() || holes.size() < 1) return;
+    Eigen::Vector4f min_pt, max_pt;
+    pcl::getMinMax3D(*cad_cloud, min_pt, max_pt);
+    const double diameter = (max_pt.head<3>() - min_pt.head<3>()).norm();
+    const Eigen::Vector3d camera(0.0, 0.0, diameter);
+    const double radius = diameter * 100.0;
+
+    ct::TicToc ticToc;
+    ticToc.tic();
+
+    const auto result = pcl_utils::HiddenPointRemoval<pcl::PointXYZRGBNormal>(cad_cloud, camera, radius);
+    const auto visible = pcl_utils::ExtractVisiblePoints<pcl::PointXYZRGBNormal>(cad_cloud, result.visible_indices);
+
+    float time_use = ticToc.toc();
+
+    printI(tr("PCD hidden point removal done, left point num is %1, take time %2 ms.").arg(visible->size()).arg(time_use));
+
+    pcl::copyPointCloud(*visible, *post_cloud);
+    
+    if (!post_cloud->empty()) this->showPcd(post_cloud, m_mesh, holes, ui->coordinateSizeSpin->value());
+}
+
+void MakeTool::on_paraSaveBtn_clicked() {
+    
+}
+
+Eigen::Quaterniond MakeTool::dirToQuat(const gp_Dir& direction)
+{
+    const Eigen::Vector3d from_z(0.0, 0.0, 1.0);  // 局部默认轴
+    const Eigen::Vector3d to_dir(direction.X(), direction.Y(), direction.Z());
+    Eigen::Quaterniond q = Eigen::Quaterniond::FromTwoVectors(from_z, to_dir);
+    if (q.norm() < 1e-12) {
+        q = Eigen::Quaterniond::Identity();
+    }
+    else {
+        q.normalize();
+    }
+    return q;  // (w, x, y, z)
+}
+
+void MakeTool::on_loadCadTcpBtn_clicked()  {
+    QString filepath = QFileDialog::getOpenFileName(this, tr("Get HandEye CalibFile"), "./config/tcp/", "Json (*.json)");
+    if (filepath.isEmpty()) {
+        printE("Load Tcp calibration json file failed!");
+        return;
+    }
+
+    ui->cadTcpFileEdit->setText(filepath);
 }
 
 Eigen::Affine3d MakeTool::readQuatPoseFromJson(const std::string& filepath) {
