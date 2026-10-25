@@ -38,7 +38,7 @@ public:
     //!
     //! 立焊（EdgeCluster::isVertical == true）
     //! - 位置仍沿焊缝从高处走到低处
-    //! - Z：水平分量指向坡口内侧，并相对 XOY 面向下倾斜 verticalTiltDeg（默认 45°）
+    //! - Z：水平分量指向坡口内侧，并相对 XOY 面向上倾斜 verticalTiltDeg（默认 45°）
     //! - Y：水平，且与 Z 垂直
     //! - X：Y × Z
     //!

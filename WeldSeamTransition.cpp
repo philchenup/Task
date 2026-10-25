@@ -478,7 +478,7 @@ bool BuildVerticalSample(const SeamGeom& seam,
         return false;
     }
 
-    const gp_Vec zVec = inH * std::cos(tiltRad) + gp_Vec(0.0, 0.0, -1.0) * std::sin(tiltRad);
+    const gp_Vec zVec = inH * std::cos(tiltRad) + gp_Vec(0.0, 0.0, 1.0) * std::sin(tiltRad);
     if (zVec.Magnitude() <= Precision::Confusion()) {
         return false;
     }
@@ -797,7 +797,7 @@ bool WeldingPathBuilder::BuildClusterTrajectory(const TopoDS_Shape& selectShape,
                 return false;
             }
             inH.Normalize();
-            const gp_Vec zVec = inH * std::cos(tiltRad) + gp_Vec(0.0, 0.0, -1.0) * std::sin(tiltRad);
+            const gp_Vec zVec = inH * std::cos(tiltRad) + gp_Vec(0.0, 0.0, 1.0) * std::sin(tiltRad);
             gp_Vec yVec(-inH.Y(), inH.X(), 0.0);
             if (yVec.Dot(gp_Vec(yFrom)) < 0.0) {
                 yVec.Reverse();

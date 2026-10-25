@@ -29,7 +29,7 @@ void MainWindow::Trajectory()
     }
 
     // 平焊：Y 沿焊缝前进，Z 指向坡口内侧，X = Y × Z，交接处采样圆弧。
-    // 立焊：Z 相对水平面向下 45° 指向坡口，Y 保持水平，X = Y × Z。
+    // 立焊：Z 相对水平面向上 45° 指向坡口，Y 保持水平，X = Y × Z。
     // 每个簇的首尾带沿 -Z 偏移 50 mm 的进入点和退出点。
     constexpr double kSpacingMm = 10.0;
     constexpr double kRetractMm = 50.0;
