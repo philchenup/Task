@@ -445,9 +445,9 @@ bool HorizontalInward(const SeamGeom& seam, double u, const gp_Vec* prevInH, gp_
         return false;
     }
 
-    // 两侧面法向夹角平分线 n1+n2 指向焊缝内侧。
-    // 取反会把立焊 Z 的水平分量带到焊缝外侧。
-    const gp_Vec inward = gp_Vec(n1) + gp_Vec(n2);
+    // n1+n2 的水平投影朝向焊缝外侧。指向内侧时取反。
+    // 向上 45° 由 BuildVerticalSample 的世界 +Z 分量保持，这里只改水平方向。
+    const gp_Vec inward = -(gp_Vec(n1) + gp_Vec(n2));
     inH = gp_Vec(inward.X(), inward.Y(), 0.0);
     if (inH.Magnitude() <= Precision::Confusion()) {
         if (prevInH != nullptr && prevInH->Magnitude() > Precision::Confusion()) {
