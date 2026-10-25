@@ -835,12 +835,24 @@ bool WeldingPathBuilder::BuildClusterTrajectory(const TopoDS_Shape& selectShape,
         return false;
     }
 
-    if (retractMm > Precision::Confusion()) {
-        out.push_back(RetractPoint(seamPoints.front(), retractMm));
+    if (vertical && retractMm > Precision::Confusion()) {
+        // 立焊：先到焊完退焊位置（终点沿 -Z），再去预焊位置（起点沿 -Z），
+        // 然后沿焊缝施焊，焊完后再退回退焊位置。
+        const DiscretePoint preWeld = RetractPoint(seamPoints.front(), retractMm);
+        const DiscretePoint retractAfterWeld = RetractPoint(seamPoints.back(), retractMm);
+        out.push_back(retractAfterWeld);
+        out.push_back(preWeld);
+        out.insert(out.end(), seamPoints.begin(), seamPoints.end());
+        out.push_back(retractAfterWeld);
     }
-    out.insert(out.end(), seamPoints.begin(), seamPoints.end());
-    if (retractMm > Precision::Confusion()) {
-        out.push_back(RetractPoint(seamPoints.back(), retractMm));
+    else {
+        if (retractMm > Precision::Confusion()) {
+            out.push_back(RetractPoint(seamPoints.front(), retractMm));
+        }
+        out.insert(out.end(), seamPoints.begin(), seamPoints.end());
+        if (retractMm > Precision::Confusion()) {
+            out.push_back(RetractPoint(seamPoints.back(), retractMm));
+        }
     }
     return true;
 }

@@ -41,8 +41,10 @@ public:
     //! - Z：水平分量指向坡口内侧，并相对 XOY 面向上倾斜 verticalTiltDeg（默认 45°）
     //! - Y：水平，且与 Z 垂直
     //! - X：Y × Z
+    //! - 顺序：焊完退焊位置 → 预焊位置 → 焊缝 → 焊完退焊位置。
+    //!   退焊位置是焊缝终点沿 -Z 偏移 retractMm，预焊位置是焊缝起点沿 -Z 偏移 retractMm。
     //!
-    //! 每个簇保留进入点与退出点：焊缝起点之前、终点之后各一点，沿该点 -Z 偏移 retractMm。
+    //! 平焊每个簇保留进入点与退出点：焊缝起点之前、终点之后各一点，沿该点 -Z 偏移 retractMm。
     //! 平焊与立焊分簇，簇与簇之间不在工件表面上直接连姿态。
     bool BuildWeldingTrajectory(const TopoDS_Shape& selectShape,
         const std::vector<EdgeCluster>& sortedClusters,
