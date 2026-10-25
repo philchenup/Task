@@ -26,9 +26,10 @@ static const Standard_Real kOccMillimeterToMeter = 0.001;
  * linearDeflection 仍是形状单位（毫米）。<=0 时按包围盒对角线的 1% 自动取。
  * 网格在缩放前生成，所以不要把这个偏差改成米。
  *
- * load3DModel() 保持原调用即可：
+ * load3DModel() 只绑定一次：
  *   rlWorkpiece = bindAisShapeToRlBody(loadShape, scene->getModel(1));
- * 拖动后：
+ * OccView 拖动结束发出 updateAis2RL()。槽里只更新位姿，不要再次 bind，
+ * 否则会多出一个 Body，并把已经烘焙进 Shape().Location() 的平移再乘一次。
  *   syncAisPoseToRlBody(loadShape, rlWorkpiece);
  *
  * @param ais           已有几何的 AIS_Shape（STEP 读入后的显示对象）
