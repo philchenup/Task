@@ -20,6 +20,7 @@
 #include <gp_Pnt2d.hxx>
 #include <gp_Vec.hxx>
 #include <Precision.hxx>
+#include <Standard_Failure.hxx>
 #include <TopExp.hxx>
 #include <TopoDS.hxx>
 #include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
@@ -1363,41 +1364,77 @@ bool WeldingPathBuilder::BuildInterpolationCurve(const ProcessedEdge& pe1,
     const gp_Pnt& p1 = pe1.EndPoint;
     const gp_Pnt& p2 = pe2.StartPoint;
 
-    gp_Vec t1, t2;
-    bool hasT1 = GetTangentAt(pe1, t1);
-    bool hasT2 = GetTangentAt(pe2, t2);
+    const Standard_Real chord = p1.Distance(p2);
+    // 相邻点距小于公差时，GeomAPI_Interpolate 构造函数直接抛 Standard_ConstructionError。
+    // 焊缝首尾已经重合，不需要再插一条过渡曲线。
+    if (!(chord > Precision::Confusion())) {
+        return false;
+    }
 
-    if (t1.Magnitude() > Precision::Confusion()) t1.Normalize();
-    if (t2.Magnitude() > Precision::Confusion()) t2.Normalize();
-
-    Standard_Real chord = p1.Distance(p2);
+    gp_Vec t1;
+    gp_Vec t2;
+    if (!GetTangentAt(pe1, t1) || !GetTangentAt(pe2, t2)) {
+        return false;
+    }
+    if (t1.Magnitude() <= Precision::Confusion() || t2.Magnitude() <= Precision::Confusion()) {
+        return false;
+    }
+    t1.Normalize();
+    t2.Normalize();
 
     Standard_Real cosA = t1.Dot(t2);
     cosA = std::max(-1.0, std::min(1.0, cosA));
-    Standard_Real theta = std::acos(cosA);
+    const Standard_Real theta = std::acos(cosA);
 
-    Standard_Real scale;
-    if (theta < 1e-6) {
+    Standard_Real scale = 0.0;
+    if (theta < 1.0e-6) {
         scale = chord / 3.0;
     }
     else {
-        Standard_Real R = chord / (2.0 * std::sin(theta / 2.0));
-        scale = (1.0 / 4.0) * std::tan(theta / 4.0) * R;
+        const Standard_Real sinHalf = std::sin(theta * 0.5);
+        if (!(std::abs(sinHalf) > Precision::Confusion())) {
+            return false;
+        }
+        const Standard_Real radius = chord / (2.0 * sinHalf);
+        scale = 0.25 * std::tan(theta * 0.25) * radius;
+    }
+
+    const gp_Vec startTangent = t1 * scale;
+    const gp_Vec endTangent = t2 * scale;
+    // Load() 在切向量长度小于等于公差时同样抛 Standard_ConstructionError。
+    if (startTangent.Magnitude() <= Precision::Confusion()
+        || endTangent.Magnitude() <= Precision::Confusion()) {
+        return false;
     }
 
     Handle(TColgp_HArray1OfPnt) points = new TColgp_HArray1OfPnt(1, 2);
     points->SetValue(1, p1);
     points->SetValue(2, p2);
-    GeomAPI_Interpolate interp(points, Standard_False, Precision::Confusion());
-    interp.Load(t1 * scale, t2 * scale, Standard_False);
-    interp.Perform();
-    if (!interp.IsDone()) return false;
 
-    Handle(Geom_BSplineCurve) bspline = interp.Curve();
-    BRepBuilderAPI_MakeEdge edgeMaker(bspline);
-    if (!edgeMaker.IsDone()) return false;
-    outEdge = edgeMaker.Edge();
-    return true;
+    try {
+        // 公差必须小于弦长，否则构造函数认为两点重合。
+        const Standard_Real fitTol = std::min(Precision::Confusion(), chord * 0.1);
+        GeomAPI_Interpolate interp(points, Standard_False, fitTol);
+        interp.Load(startTangent, endTangent, Standard_False);
+        interp.Perform();
+        if (!interp.IsDone()) {
+            return false;
+        }
+
+        Handle(Geom_BSplineCurve) bspline = interp.Curve();
+        if (bspline.IsNull()) {
+            return false;
+        }
+        BRepBuilderAPI_MakeEdge edgeMaker(bspline);
+        if (!edgeMaker.IsDone()) {
+            return false;
+        }
+        outEdge = edgeMaker.Edge();
+        return true;
+    }
+    catch (const Standard_Failure&) {
+        return false;
+    }
 }
 
 TopoDS_Wire WeldingPathBuilder::BuildWiresFromUnorderedEdges(
