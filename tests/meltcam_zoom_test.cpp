@@ -1,6 +1,7 @@
 #include "MeltCamZoom.h"
 
 #include <QApplication>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QThread>
 #include <QPixmap>
@@ -9,14 +10,27 @@
 
 namespace {
 
-QWidget *findZoomWindow()
+QWidget *findZoomWindow(const QString &title = QString())
 {
     const QWidgetList tops = QApplication::topLevelWidgets();
     for (QWidget *widget : tops) {
-        if (widget->objectName() == QLatin1String("meltCamZoomWindow") && widget->isVisible())
+        if (widget->objectName() != QLatin1String("imageZoomWindow") || !widget->isVisible())
+            continue;
+        if (title.isEmpty() || widget->windowTitle() == title)
             return widget;
     }
     return nullptr;
+}
+
+int visibleZoomCount()
+{
+    int count = 0;
+    const QWidgetList tops = QApplication::topLevelWidgets();
+    for (QWidget *widget : tops) {
+        if (widget->objectName() == QLatin1String("imageZoomWindow") && widget->isVisible())
+            ++count;
+    }
+    return count;
 }
 
 int dipWidth(const QPixmap &pixmap)
@@ -44,6 +58,8 @@ private slots:
     void nullLabelIsIgnored();
     void frameFromWorkerThreadReachesLabel();
     void deletingHostRemovesZoom();
+    void twoLabelsZoomIndependently();
+    void titleFallsBackToObjectName();
 };
 
 void MeltCamZoomTest::doubleClickOpensZoomAndCloseRestores()
@@ -124,13 +140,7 @@ void MeltCamZoomTest::secondDoubleClickReusesTheSameWindow()
     QApplication::processEvents();
     QCOMPARE(findZoomWindow(), first);
 
-    int zoomCount = 0;
-    const QWidgetList tops = QApplication::topLevelWidgets();
-    for (QWidget *widget : tops) {
-        if (widget->objectName() == QLatin1String("meltCamZoomWindow") && widget->isVisible())
-            ++zoomCount;
-    }
-    QCOMPARE(zoomCount, 1);
+    QCOMPARE(visibleZoomCount(), 1);
 
     QLabel *view = zoomView(first);
     QVERIFY(view != nullptr);
@@ -181,6 +191,13 @@ void MeltCamZoomTest::frameFromWorkerThreadReachesLabel()
     QTRY_VERIFY(!label.pixmap().isNull());
     const QImage shown = label.pixmap().toImage();
     QCOMPARE(shown.pixelColor(shown.width() / 2, shown.height() / 2), QColor(Qt::red));
+
+    QTest::mouseDClick(&label, Qt::LeftButton);
+    QApplication::processEvents();
+    QWidget *zoom = findZoomWindow(QStringLiteral("熔池相机"));
+    QVERIFY(zoom != nullptr);
+    zoom->close();
+    QTRY_VERIFY(findZoomWindow() == nullptr);
 }
 
 void MeltCamZoomTest::deletingHostRemovesZoom()
@@ -201,6 +218,100 @@ void MeltCamZoomTest::deletingHostRemovesZoom()
 
     delete window;
     QTRY_VERIFY(findZoomWindow() == nullptr);
+}
+
+void MeltCamZoomTest::twoLabelsZoomIndependently()
+{
+    QWidget window;
+    auto *layout = new QHBoxLayout(&window);
+    auto *melt = new QLabel(&window);
+    auto *weld = new QLabel(&window);
+    melt->setObjectName(QStringLiteral("meltCamLabel"));
+    weld->setObjectName(QStringLiteral("weldCamLabel"));
+    melt->setFixedSize(160, 120);
+    weld->setFixedSize(160, 120);
+    layout->addWidget(melt);
+    layout->addWidget(weld);
+    window.show();
+    QApplication::processEvents();
+
+    QImage green(800, 600, QImage::Format_RGB32);
+    green.fill(Qt::green);
+    QImage red(800, 600, QImage::Format_RGB32);
+    red.fill(Qt::red);
+    setMeltCamImage(melt, green);
+    setZoomableImage(weld, red, QStringLiteral("焊缝相机"));
+
+    QTest::mouseDClick(melt, Qt::LeftButton);
+    QTest::mouseDClick(weld, Qt::LeftButton);
+    QApplication::processEvents();
+
+    QWidget *meltZoom = findZoomWindow(QStringLiteral("熔池相机"));
+    QWidget *weldZoom = findZoomWindow(QStringLiteral("焊缝相机"));
+    QVERIFY(meltZoom != nullptr);
+    QVERIFY(weldZoom != nullptr);
+    QVERIFY(meltZoom != weldZoom);
+    QCOMPARE(visibleZoomCount(), 2);
+
+    const QPixmap meltView = zoomView(meltZoom)->pixmap();
+    const QPixmap weldView = zoomView(weldZoom)->pixmap();
+    QCOMPARE(meltView.toImage().pixelColor(meltView.width() / 2, meltView.height() / 2), QColor(Qt::green));
+    QCOMPARE(weldView.toImage().pixelColor(weldView.width() / 2, weldView.height() / 2), QColor(Qt::red));
+    QVERIFY(dipWidth(meltView) > dipWidth(melt->pixmap()));
+    QVERIFY(dipWidth(weldView) > dipWidth(weld->pixmap()));
+
+    QImage yellow(800, 600, QImage::Format_RGB32);
+    yellow.fill(Qt::yellow);
+    setZoomableImage(weld, yellow, QStringLiteral("焊缝相机"));
+    const QPixmap weldUpdated = zoomView(weldZoom)->pixmap();
+    QCOMPARE(weldUpdated.toImage().pixelColor(weldUpdated.width() / 2, weldUpdated.height() / 2),
+             QColor(Qt::yellow));
+    const QPixmap meltStill = zoomView(meltZoom)->pixmap();
+    QCOMPARE(meltStill.toImage().pixelColor(meltStill.width() / 2, meltStill.height() / 2), QColor(Qt::green));
+
+    weldZoom->close();
+    QTRY_VERIFY(findZoomWindow(QStringLiteral("焊缝相机")) == nullptr);
+    QVERIFY(findZoomWindow(QStringLiteral("熔池相机")) == meltZoom);
+    QVERIFY(dipWidth(weld->pixmap()) <= weld->width());
+    QCOMPARE(weld->pixmap().toImage().pixelColor(weld->pixmap().width() / 2, weld->pixmap().height() / 2),
+             QColor(Qt::yellow));
+    QCOMPARE(melt->pixmap().toImage().pixelColor(melt->pixmap().width() / 2, melt->pixmap().height() / 2),
+             QColor(Qt::green));
+
+    meltZoom->close();
+    QTRY_VERIFY(findZoomWindow() == nullptr);
+}
+
+void MeltCamZoomTest::titleFallsBackToObjectName()
+{
+    QWidget window;
+    auto *named = new QLabel(&window);
+    auto *untitled = new QLabel(&window);
+    named->setObjectName(QStringLiteral("wireCamLabel"));
+    named->setFixedSize(160, 120);
+    untitled->setFixedSize(160, 120);
+    window.show();
+    QApplication::processEvents();
+
+    QImage image(320, 240, QImage::Format_RGB32);
+    image.fill(Qt::cyan);
+    setZoomableImage(named, image);
+    setZoomableImage(untitled, image);
+
+    QTest::mouseDClick(named, Qt::LeftButton);
+    QTest::mouseDClick(untitled, Qt::LeftButton);
+    QApplication::processEvents();
+
+    QVERIFY(findZoomWindow(QStringLiteral("wireCamLabel")) != nullptr);
+    QVERIFY(findZoomWindow(QStringLiteral("图像")) != nullptr);
+
+    setZoomableImage(named, image, QStringLiteral("送丝相机"));
+    QVERIFY(findZoomWindow(QStringLiteral("送丝相机")) != nullptr);
+    QVERIFY(findZoomWindow(QStringLiteral("wireCamLabel")) == nullptr);
+
+    findZoomWindow(QStringLiteral("送丝相机"))->close();
+    findZoomWindow(QStringLiteral("图像"))->close();
+    QTRY_VERIFY(visibleZoomCount() == 0);
 }
 
 QTEST_MAIN(MeltCamZoomTest)

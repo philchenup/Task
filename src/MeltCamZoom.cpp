@@ -16,12 +16,12 @@
 
 namespace {
 
-class MeltCamZoomState;
+class LabelZoomState;
 
-QHash<QLabel *, MeltCamZoomState *> &zoomStates()
+QHash<QLabel *, LabelZoomState *> &zoomStates()
 {
     // 故意不在进程退出时析构，避免标签析构顺序和函数内静态对象打架。
-    static auto *table = new QHash<QLabel *, MeltCamZoomState *>();
+    static auto *table = new QHash<QLabel *, LabelZoomState *>();
     return *table;
 }
 
@@ -99,18 +99,17 @@ public:
     }
 };
 
-class MeltCamZoomWindow final : public QDialog
+class ImageZoomWindow final : public QDialog
 {
 public:
-    explicit MeltCamZoomWindow(QWidget *parent)
+    explicit ImageZoomWindow(QWidget *parent)
         : QDialog(parent, Qt::Dialog | Qt::WindowCloseButtonHint | Qt::WindowMinMaxButtonsHint)
         , m_view(new ZoomView(this))
     {
         setAttribute(Qt::WA_DeleteOnClose);
         setAttribute(Qt::WA_QuitOnClose, false);
         setModal(false);
-        setObjectName(QStringLiteral("meltCamZoomWindow"));
-        setWindowTitle(QStringLiteral("熔池相机"));
+        setObjectName(QStringLiteral("imageZoomWindow"));
         setStyleSheet(QStringLiteral(
             "QDialog { background-color: #101010; }"
             "QLabel { background-color: #101010; color: #d0d0d0; }"));
@@ -203,10 +202,10 @@ private:
     bool m_refitting = false;
 };
 
-class MeltCamZoomState final : public QObject
+class LabelZoomState final : public QObject
 {
 public:
-    explicit MeltCamZoomState(QLabel *label)
+    explicit LabelZoomState(QLabel *label)
         : QObject(label)
         , m_label(label)
     {
@@ -222,7 +221,7 @@ public:
             m_label->setToolTip(QStringLiteral("双击放大"));
     }
 
-    ~MeltCamZoomState() override
+    ~LabelZoomState() override
     {
         zoomStates().remove(m_label);
         if (!m_zoom)
@@ -233,8 +232,13 @@ public:
         zoom->deleteLater();
     }
 
-    void setImage(const QImage &image)
+    void setImage(const QImage &image, const QString &zoomTitle)
     {
+        if (zoomTitle != m_title) {
+            m_title = zoomTitle;
+            if (m_zoom)
+                m_zoom->setWindowTitle(m_title);
+        }
         if (!image.isNull() && image.cacheKey() == m_image.cacheKey())
             return;
         m_image = image;
@@ -278,7 +282,7 @@ private:
         const QSize target = m_label->contentsRect().size();
         if (target.isEmpty() || target == m_labelFit)
             return;
-        // 小图用快速缩放，保证熔池相机连续帧还能跟上界面刷新。
+        // 小图用快速缩放，连续帧还能跟上界面刷新。
         m_label->setPixmap(scaledPixmap(m_image, target, m_label->devicePixelRatioF(),
                                         Qt::FastTransformation));
         m_labelFit = target;
@@ -305,7 +309,8 @@ private:
             return;
         }
 
-        auto *zoom = new MeltCamZoomWindow(m_label->window());
+        auto *zoom = new ImageZoomWindow(m_label->window());
+        zoom->setWindowTitle(m_title);
         m_zoom = zoom;
         connect(zoom, &QObject::destroyed, this, [this]() {
             restoreLabel();
@@ -315,30 +320,46 @@ private:
 
     QLabel *m_label = nullptr;
     QImage m_image;
+    QString m_title = QStringLiteral("图像");
     QSize m_labelFit;
-    QPointer<MeltCamZoomWindow> m_zoom;
+    QPointer<ImageZoomWindow> m_zoom;
 };
+
+QString resolvedZoomTitle(QLabel *label, const QString &zoomTitle)
+{
+    if (!zoomTitle.isEmpty())
+        return zoomTitle;
+    if (!label->objectName().isEmpty())
+        return label->objectName();
+    return QStringLiteral("图像");
+}
 
 } // namespace
 
-void setMeltCamImage(QLabel *meltCamLabel, const QImage &image)
+void setZoomableImage(QLabel *label, const QImage &image, const QString &zoomTitle)
 {
-    if (meltCamLabel == nullptr)
+    if (label == nullptr)
         return;
 
-    if (QThread::currentThread() != meltCamLabel->thread()) {
+    if (QThread::currentThread() != label->thread()) {
         QImage copy(image);
         copy.detach();
-        const bool posted = QMetaObject::invokeMethod(meltCamLabel, [meltCamLabel, copy]() {
-            setMeltCamImage(meltCamLabel, copy);
+        const QString title = zoomTitle;
+        const bool posted = QMetaObject::invokeMethod(label, [label, copy, title]() {
+            setZoomableImage(label, copy, title);
         }, Qt::QueuedConnection);
         if (!posted)
-            qWarning("setMeltCamImage: 无法把图像投递到 meltCamLabel 所在的界面线程");
+            qWarning("setZoomableImage: 无法把图像投递到标签所在的界面线程");
         return;
     }
 
-    MeltCamZoomState *state = zoomStates().value(meltCamLabel, nullptr);
+    LabelZoomState *state = zoomStates().value(label, nullptr);
     if (state == nullptr)
-        state = new MeltCamZoomState(meltCamLabel);
-    state->setImage(image);
+        state = new LabelZoomState(label);
+    state->setImage(image, resolvedZoomTitle(label, zoomTitle));
+}
+
+void setMeltCamImage(QLabel *meltCamLabel, const QImage &image)
+{
+    setZoomableImage(meltCamLabel, image, QStringLiteral("熔池相机"));
 }
