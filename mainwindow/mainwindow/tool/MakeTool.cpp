@@ -313,21 +313,22 @@ bool MakeTool::saveClassJson(const QString &jsonPath)
     if (!templateTableWidget || jsonPath.trimmed().isEmpty())
         return false;
 
-    nlohmann::ordered_json items = nlohmann::ordered_json::array();
+    nlohmann::ordered_json model = nlohmann::ordered_json::object();
     const int rows = templateTableWidget->rowCount();
     for (int row = 0; row < rows; ++row) {
         const QTableWidgetItem *nameItem = templateTableWidget->item(row, 1);
         const QTableWidgetItem *pathItem = templateTableWidget->item(row, 2);
-        const QString name = nameItem ? nameItem->text() : QString();
-        const QString path = pathItem ? pathItem->text() : QString();
-        const QByteArray nameUtf8 = name.toUtf8();
-        const QByteArray pathUtf8 = path.toUtf8();
+        const QByteArray nameUtf8 = (nameItem ? nameItem->text() : QString()).toUtf8();
+        const QByteArray pathUtf8 = (pathItem ? pathItem->text() : QString()).toUtf8();
+        if (nameUtf8.isEmpty())
+            continue;
 
-        nlohmann::ordered_json item = nlohmann::ordered_json::object();
-        item["识别类别"] = std::string(nameUtf8.constData(), static_cast<size_t>(nameUtf8.size()));
-        item["文件地址"] = std::string(pathUtf8.constData(), static_cast<size_t>(pathUtf8.size()));
-        items.push_back(std::move(item));
+        model[std::string(nameUtf8.constData(), static_cast<size_t>(nameUtf8.size()))] =
+            std::string(pathUtf8.constData(), static_cast<size_t>(pathUtf8.size()));
     }
+
+    nlohmann::ordered_json root = nlohmann::ordered_json::object();
+    root["model"] = std::move(model);
 
     QFile file(jsonPath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
@@ -337,7 +338,7 @@ bool MakeTool::saveClassJson(const QString &jsonPath)
         return false;
     }
 
-    QByteArray bytes = QByteArray::fromStdString(items.dump(2));
+    QByteArray bytes = QByteArray::fromStdString(root.dump(2));
     bytes.append('\n');
     const bool ok = file.write(bytes) == bytes.size();
     file.close();

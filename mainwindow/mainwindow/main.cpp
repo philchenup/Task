@@ -121,19 +121,21 @@ int runSelfTest()
     jsonFile.close();
     const auto saved = nlohmann::json::parse(rawJson.constData(),
                                              rawJson.constData() + rawJson.size());
-    if (!saved.is_array() || saved.size() != 5)
+    if (!saved.is_object() || !saved.contains("model") || !saved["model"].is_object())
+        return fail("json model");
+    const auto &model = saved["model"];
+    if (model.size() != 5)
         return fail("json size");
-    if (saved[0].at("识别类别") != "shield"
-        || saved[0].at("文件地址") != "targets/shield.txt")
-        return fail("json first row");
-    if (saved[1].at("识别类别") != "stator" || saved[1].at("文件地址") != "")
+    if (model.at("shield") != "targets/shield.txt")
+        return fail("json shield");
+    if (model.at("stator") != "")
         return fail("json empty address");
-    if (saved[2].at("识别类别") != "shell"
-        || saved[2].at("文件地址") != "targets/壳.txt")
+    if (model.at("shell") != "targets/壳.txt")
         return fail("json chinese address");
-    const int namePos = rawJson.indexOf(QStringLiteral("识别类别").toUtf8());
-    const int pathPos = rawJson.indexOf(QStringLiteral("文件地址").toUtf8());
-    if (namePos < 0 || pathPos < 0 || namePos > pathPos)
+    const int modelPos = rawJson.indexOf("\"model\"");
+    const int shieldPos = rawJson.indexOf("\"shield\"");
+    const int statorPos = rawJson.indexOf("\"stator\"");
+    if (modelPos < 0 || shieldPos < modelPos || statorPos < shieldPos)
         return fail("json key order");
 
     table->selectRow(0);
