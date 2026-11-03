@@ -1,0 +1,5 @@
+shield
+stator
+shell
+bearing
+sbearing
