@@ -10,6 +10,8 @@ msvc {
 TARGET = MakeToolDemo
 TEMPLATE = app
 
+INCLUDEPATH += $$PWD/third_party
+
 SOURCES += \
     main.cpp \
     tool/MakeTool.cpp

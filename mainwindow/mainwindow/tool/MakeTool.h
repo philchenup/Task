@@ -19,6 +19,12 @@ public:
     // 重复调用会按新文件重填表格，已填写的文件地址会被清空。
     void loadClassTable(const QString &classTxtPath);
 
+    // 把表格里的识别类别和文件地址保存成 JSON 数组。成功返回 true。
+    // [
+    //   { "识别类别": "shield", "文件地址": "targets/shield.txt" }
+    // ]
+    bool saveClassJson(const QString &jsonPath);
+
 private:
     void setupUi();
     void applyTableStyle();

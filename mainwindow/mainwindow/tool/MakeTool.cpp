@@ -9,6 +9,7 @@
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <nlohmann/json.hpp>
 #include <QFont>
 #include <QMessageBox>
 #include <QPalette>
@@ -305,4 +306,46 @@ void MakeTool::clearSelectedFile()
         item->setText(QString());
         item->setToolTip(QString());
     }
+}
+
+bool MakeTool::saveClassJson(const QString &jsonPath)
+{
+    if (!templateTableWidget || jsonPath.trimmed().isEmpty())
+        return false;
+
+    nlohmann::ordered_json items = nlohmann::ordered_json::array();
+    const int rows = templateTableWidget->rowCount();
+    for (int row = 0; row < rows; ++row) {
+        const QTableWidgetItem *nameItem = templateTableWidget->item(row, 1);
+        const QTableWidgetItem *pathItem = templateTableWidget->item(row, 2);
+        const QString name = nameItem ? nameItem->text() : QString();
+        const QString path = pathItem ? pathItem->text() : QString();
+        const QByteArray nameUtf8 = name.toUtf8();
+        const QByteArray pathUtf8 = path.toUtf8();
+
+        nlohmann::ordered_json item = nlohmann::ordered_json::object();
+        item["识别类别"] = std::string(nameUtf8.constData(), static_cast<size_t>(nameUtf8.size()));
+        item["文件地址"] = std::string(pathUtf8.constData(), static_cast<size_t>(pathUtf8.size()));
+        items.push_back(std::move(item));
+    }
+
+    QFile file(jsonPath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        QMessageBox::warning(this,
+                             QStringLiteral("提示"),
+                             QStringLiteral("无法保存 JSON：\n%1").arg(jsonPath));
+        return false;
+    }
+
+    QByteArray bytes = QByteArray::fromStdString(items.dump(2));
+    bytes.append('\n');
+    const bool ok = file.write(bytes) == bytes.size();
+    file.close();
+    if (!ok) {
+        QMessageBox::warning(this,
+                             QStringLiteral("提示"),
+                             QStringLiteral("写入 JSON 失败：\n%1").arg(jsonPath));
+        return false;
+    }
+    return true;
 }

@@ -11,6 +11,8 @@
 #include <QTextCodec>
 #include <QTimer>
 
+#include <nlohmann/json.hpp>
+
 namespace {
 
 int fail(const char *message)
@@ -107,6 +109,33 @@ int runSelfTest()
     if (table->rowCount() != 5 || table->item(0, 1)->text() != QStringLiteral("shield"))
         return fail("reload class.txt");
     table->item(0, 2)->setText(QStringLiteral("targets/shield.txt"));
+    table->item(2, 2)->setText(QStringLiteral("targets/壳.txt"));
+
+    const QString jsonPath = QStringLiteral("/tmp/class_table.json");
+    if (!tool.saveClassJson(jsonPath))
+        return fail("saveClassJson");
+    QFile jsonFile(jsonPath);
+    if (!jsonFile.open(QIODevice::ReadOnly))
+        return fail("read saved json");
+    const QByteArray rawJson = jsonFile.readAll();
+    jsonFile.close();
+    const auto saved = nlohmann::json::parse(rawJson.constData(),
+                                             rawJson.constData() + rawJson.size());
+    if (!saved.is_array() || saved.size() != 5)
+        return fail("json size");
+    if (saved[0].at("识别类别") != "shield"
+        || saved[0].at("文件地址") != "targets/shield.txt")
+        return fail("json first row");
+    if (saved[1].at("识别类别") != "stator" || saved[1].at("文件地址") != "")
+        return fail("json empty address");
+    if (saved[2].at("识别类别") != "shell"
+        || saved[2].at("文件地址") != "targets/壳.txt")
+        return fail("json chinese address");
+    const int namePos = rawJson.indexOf(QStringLiteral("识别类别").toUtf8());
+    const int pathPos = rawJson.indexOf(QStringLiteral("文件地址").toUtf8());
+    if (namePos < 0 || pathPos < 0 || namePos > pathPos)
+        return fail("json key order");
+
     table->selectRow(0);
     tool.resize(860, 380);
     tool.show();
