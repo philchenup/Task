@@ -247,6 +247,9 @@ public:
 
     const Library& library() const;
 
+protected:
+    virtual bool eventFilter(QObject* watched, QEvent* event);
+
 private:
     void buildUi();
     void connectSignals();

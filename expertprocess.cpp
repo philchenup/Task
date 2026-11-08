@@ -34,6 +34,7 @@
 #include <QListWidget>
 #include <QMenu>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QPixmap>
 #include <QPushButton>
 #include <QScrollArea>
@@ -84,7 +85,7 @@ QDoubleSpinBox* dspin(double min, double max, double step, int decimals, const Q
     box->setDecimals(decimals);
     if (!suffix.isEmpty())
         box->setSuffix(suffix);
-    box->setMinimumWidth(118);
+    box->setMinimumWidth(150);
     return box;
 }
 
@@ -95,7 +96,7 @@ QSpinBox* ispin(int min, int max, int step, const QString& suffix)
     box->setSingleStep(step);
     if (!suffix.isEmpty())
         box->setSuffix(suffix);
-    box->setMinimumWidth(118);
+    box->setMinimumWidth(150);
     return box;
 }
 
@@ -820,6 +821,10 @@ struct ExpertProcess::Impl
     Library lib;
     Library committed;
 
+    QWidget* headerBar;
+    bool dragging;
+    QPoint dragOffset;
+
     QLabel* title;
     QLabel* status;
     QLabel* categoryLabel;
@@ -978,6 +983,7 @@ struct ExpertProcess::Impl
     Impl()
         : loading(false), ready(false), expert(false), layerIndex(-1), passIndex(-1),
           password(QStringLiteral("123456")),
+          headerBar(0), dragging(false),
           title(0), status(0), categoryLabel(0), adaptiveHint(0),
           expertCheck(0), keepCheck(0), btnPassword(0), btnImport(0), btnExport(0),
           btnHelp(0), btnClose(0), btnAddLayer(0), btnDelLayer(0), btnAddPass(0),
@@ -1034,8 +1040,8 @@ ExpertProcess::ExpertProcess(QWidget* parent)
     m_console = nullptr;
     center = false;
     setWindowTitle(QStringLiteral("专家工艺库"));
-    resize(1120, 760);
-    setMinimumSize(980, 640);
+    resize(1200, 820);
+    setMinimumSize(1040, 700);
     buildUi();
     connectSignals();
     seedLibrary();
@@ -1047,6 +1053,32 @@ ExpertProcess::ExpertProcess(QWidget* parent)
 ExpertProcess::~ExpertProcess()
 {
     delete d;
+}
+
+bool ExpertProcess::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == d->headerBar) {
+        if (event->type() == QEvent::MouseButtonPress) {
+            QMouseEvent* mouse = static_cast<QMouseEvent*>(event);
+            if (mouse->button() == Qt::LeftButton) {
+                d->dragging = true;
+                d->dragOffset = mouse->globalPos() - frameGeometry().topLeft();
+                d->headerBar->grabMouse();
+                d->headerBar->setCursor(Qt::ClosedHandCursor);
+                return true;
+            }
+        } else if (event->type() == QEvent::MouseMove && d->dragging) {
+            QMouseEvent* mouse = static_cast<QMouseEvent*>(event);
+            move(mouse->globalPos() - d->dragOffset);
+            return true;
+        } else if (event->type() == QEvent::MouseButtonRelease && d->dragging) {
+            d->dragging = false;
+            d->headerBar->releaseMouse();
+            d->headerBar->setCursor(Qt::OpenHandCursor);
+            return true;
+        }
+    }
+    return ct::CustomDialog::eventFilter(watched, event);
 }
 
 void ExpertProcess::init()
@@ -1090,7 +1122,8 @@ const ExpertProcess::Library& ExpertProcess::library() const
 void ExpertProcess::buildUi()
 {
     setStyleSheet(QStringLiteral(
-        "QDialog,QWidget{background:#000000;color:#e8e8e8;font-size:12px;}"
+        "QDialog,QWidget{background:#000000;color:#e8e8e8;font-size:16px;}"
+        "QWidget#dragBar{background:#111111;border-bottom:1px solid #3a3a3a;}"
         "QGroupBox{background:#000000;border:1px solid #3a3a3a;border-radius:4px;margin-top:12px;padding-top:4px;font-weight:600;color:#f2f2f2;}"
         "QGroupBox::title{subcontrol-origin:margin;left:8px;padding:0 4px;color:#f2f2f2;}"
         "QLabel{background:transparent;color:#e8e8e8;}"
@@ -1104,22 +1137,29 @@ void ExpertProcess::buildUi()
         "QTabWidget::pane{border:1px solid #3a3a3a;background:#000000;}"
         "QTabBar::tab{background:#1a1a1a;color:#c8c8c8;padding:6px 12px;margin-right:2px;}"
         "QTabBar::tab:selected{background:#000000;color:#ffffff;font-weight:600;}"
-        "QPushButton{background:#1a1a1a;color:#f0f0f0;border:1px solid #4a4a4a;border-radius:3px;padding:4px 10px;}"
+        "QPushButton{background:#1a1a1a;color:#f0f0f0;border:1px solid #4a4a4a;border-radius:3px;padding:6px 12px;}"
         "QPushButton:hover{border-color:#6aa1ff;}"
         "QPushButton#applyBtn{background:#2f6fed;color:#ffffff;border:none;padding:5px 16px;}"
         "QPushButton#closeBtn{color:#ff8a80;}"
         "QMenu{background:#111111;color:#f0f0f0;border:1px solid #3a3a3a;}"
         "QMenu::item:selected{background:#2f6fed;}"
-        "QLabel#titleLabel{font-size:16px;font-weight:700;color:#ffffff;}"
+        "QLabel#titleLabel{font-size:22px;font-weight:700;color:#ffffff;}"
         "QLabel#hint{color:#a0a0a0;}"));
 
     QVBoxLayout* root = new QVBoxLayout(this);
     root->setContentsMargins(10, 8, 10, 8);
     root->setSpacing(8);
 
-    QHBoxLayout* header = new QHBoxLayout;
+    d->headerBar = new QWidget(this);
+    d->headerBar->setObjectName(QStringLiteral("dragBar"));
+    d->headerBar->setCursor(Qt::OpenHandCursor);
+    d->headerBar->setToolTip(QStringLiteral("按住标题栏拖动窗口"));
+    d->headerBar->installEventFilter(this);
+    QHBoxLayout* header = new QHBoxLayout(d->headerBar);
+    header->setContentsMargins(8, 6, 8, 6);
     d->title = new QLabel(QStringLiteral("专家工艺库"));
     d->title->setObjectName(QStringLiteral("titleLabel"));
+    d->title->setAttribute(Qt::WA_TransparentForMouseEvents);
     d->expertCheck = new QCheckBox(QStringLiteral("专家模式"));
     d->expertCheck->setToolTip(QStringLiteral("初始密码 123456。专家模式可编辑全部参数，并决定操作员能看到哪些项。"));
     d->keepCheck = new QCheckBox(QStringLiteral("保持专家模式打开"));
@@ -1140,7 +1180,7 @@ void ExpertProcess::buildUi()
     header->addWidget(d->btnExport);
     header->addWidget(d->btnHelp);
     header->addWidget(d->btnClose);
-    root->addLayout(header);
+    root->addWidget(d->headerBar);
 
     QWidget* left = new QWidget;
     QVBoxLayout* leftLay = new QVBoxLayout(left);
