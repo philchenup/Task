@@ -18,7 +18,6 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFont>
-#include <QFontMetrics>
 #include <QFrame>
 #include <QGridLayout>
 #include <QGroupBox>
@@ -40,7 +39,6 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
-#include <QSizePolicy>
 #include <QSpinBox>
 #include <QSplitter>
 #include <QTabWidget>
@@ -825,7 +823,6 @@ struct ExpertProcess::Impl
 
     QWidget* headerBar;
     bool dragging;
-    bool fittingMatch;
     QPoint dragOffset;
 
     QLabel* title;
@@ -986,7 +983,7 @@ struct ExpertProcess::Impl
     Impl()
         : loading(false), ready(false), expert(false), layerIndex(-1), passIndex(-1),
           password(QStringLiteral("123456")),
-          headerBar(0), dragging(false), fittingMatch(false),
+          headerBar(0), dragging(false),
           title(0), status(0), categoryLabel(0), adaptiveHint(0),
           expertCheck(0), keepCheck(0), btnPassword(0), btnImport(0), btnExport(0),
           btnHelp(0), btnClose(0), btnAddLayer(0), btnDelLayer(0), btnAddPass(0),
@@ -1081,8 +1078,6 @@ bool ExpertProcess::eventFilter(QObject* watched, QEvent* event)
             return true;
         }
     }
-    if (d->matchTable && watched == d->matchTable->viewport() && event->type() == QEvent::Resize)
-        fitMatchColumns();
     return ct::CustomDialog::eventFilter(watched, event);
 }
 
@@ -1676,17 +1671,13 @@ void ExpertProcess::buildUi()
                                                  << QStringLiteral("包角"));
         d->matchTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
         d->matchTable->horizontalHeader()->setStretchLastSection(false);
-        d->matchTable->horizontalHeader()->setMinimumSectionSize(72);
         d->matchTable->verticalHeader()->setVisible(false);
-        d->matchTable->verticalHeader()->setDefaultSectionSize(44);
         d->matchTable->setSelectionBehavior(QAbstractItemView::SelectRows);
         d->matchTable->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
         d->matchTable->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
         d->matchTable->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
         d->matchTable->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-        d->matchTable->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         d->matchTable->setMinimumHeight(220);
-        d->matchTable->viewport()->installEventFilter(this);
         pageLay->addWidget(d->matchTable, 1);
         QHBoxLayout* btns = new QHBoxLayout;
         QPushButton* addRule = new QPushButton(QStringLiteral("添加规则"));
@@ -2429,15 +2420,6 @@ void ExpertProcess::readMatch()
     d->lib.rules = rules;
 }
 
-namespace
-{
-void fitInCell(QWidget* widget)
-{
-    widget->setMinimumWidth(0);
-    widget->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-}
-}
-
 void ExpertProcess::rebuildMatch()
 {
     QSignalBlocker blocker(d->matchTable);
@@ -2477,16 +2459,6 @@ void ExpertProcess::rebuildMatch()
                 return;
             editWrap(this, d->lib.rules[row].wrap, layerNames());
         });
-        fitInCell(position);
-        fitInCell(thickMin);
-        fitInCell(thickMax);
-        fitInCell(tiltMin);
-        fitInCell(tiltMax);
-        fitInCell(layer);
-        fitInCell(start);
-        fitInCell(end);
-        fitInCell(continuous);
-        fitInCell(wrapBtn);
         d->matchTable->setCellWidget(row, 0, position);
         d->matchTable->setCellWidget(row, 1, thickMin);
         d->matchTable->setCellWidget(row, 2, thickMax);
@@ -2499,51 +2471,14 @@ void ExpertProcess::rebuildMatch()
         d->matchTable->setCellWidget(row, 9, wrapBtn);
         d->matchTable->setRowHeight(row, 44);
     }
-    fitMatchColumns();
-}
-
-void ExpertProcess::fitMatchColumns()
-{
-    QTableWidget* table = d->matchTable;
-    if (!table || d->fittingMatch)
-        return;
-    const int columns = table->columnCount();
-    if (columns <= 0)
-        return;
-    d->fittingMatch = true;
-    for (int pass = 0; pass < 2; ++pass) {
-        QVector<int> widths(columns, 0);
-        int content = 0;
-        const QFontMetrics metrics(table->horizontalHeader()->font());
-        for (int column = 0; column < columns; ++column) {
-            const QString title = table->model()->headerData(column, Qt::Horizontal).toString();
-            int width = metrics.horizontalAdvance(title) + 28;
-            for (int row = 0; row < table->rowCount(); ++row) {
-                QWidget* editor = table->cellWidget(row, column);
-                if (editor)
-                    width = qMax(width, editor->sizeHint().width() + 12);
-            }
-            width = qMax(width, table->horizontalHeader()->minimumSectionSize());
-            widths[column] = width;
-            content += width;
+    for (int column = 0; column < d->matchTable->columnCount(); ++column) {
+        int width = d->matchTable->horizontalHeader()->sectionSizeHint(column);
+        for (int row = 0; row < d->matchTable->rowCount(); ++row) {
+            if (QWidget* editor = d->matchTable->cellWidget(row, column))
+                width = qMax(width, editor->sizeHint().expandedTo(editor->minimumSize()).width());
         }
-        const int available = table->viewport()->width();
-        if (available > content && content > 0) {
-            const int extra = available - content;
-            int used = 0;
-            for (int column = 0; column < columns; ++column) {
-                const int add = extra * widths[column] / content;
-                widths[column] += add;
-                used += add;
-            }
-            widths[columns - 1] += extra - used;
-        }
-        for (int column = 0; column < columns; ++column)
-            table->setColumnWidth(column, widths[column]);
-        if (table->viewport()->width() == available)
-            break;
+        d->matchTable->setColumnWidth(column, width);
     }
-    d->fittingMatch = false;
 }
 
 void ExpertProcess::refreshLayerCombos()

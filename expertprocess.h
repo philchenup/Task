@@ -258,7 +258,6 @@ private:
     void rebuildTree(int selectIndex);
     void rebuildPasses(int selectIndex);
     void rebuildMatch();
-    void fitMatchColumns();
     void refreshLayerCombos();
     void loadLayerFields();
     void loadPass();
