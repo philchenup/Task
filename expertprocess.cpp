@@ -1669,10 +1669,21 @@ void ExpertProcess::buildUi()
                                                  << QStringLiteral("终点距离")
                                                  << QStringLiteral("连续焊")
                                                  << QStringLiteral("包角"));
-        d->matchTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+        d->matchTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
+        d->matchTable->horizontalHeader()->setStretchLastSection(false);
+        d->matchTable->horizontalHeader()->setMinimumSectionSize(72);
         d->matchTable->verticalHeader()->setVisible(false);
+        d->matchTable->verticalHeader()->setDefaultSectionSize(44);
         d->matchTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+        d->matchTable->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
+        d->matchTable->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+        d->matchTable->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        d->matchTable->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        d->matchTable->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         d->matchTable->setMinimumHeight(220);
+        const int columnWidths[] = {180, 160, 160, 160, 160, 220, 150, 150, 90, 120};
+        for (int column = 0; column < 10; ++column)
+            d->matchTable->setColumnWidth(column, columnWidths[column]);
         pageLay->addWidget(d->matchTable, 1);
         QHBoxLayout* btns = new QHBoxLayout;
         QPushButton* addRule = new QPushButton(QStringLiteral("添加规则"));
@@ -2464,7 +2475,7 @@ void ExpertProcess::rebuildMatch()
         d->matchTable->setCellWidget(row, 7, end);
         d->matchTable->setCellWidget(row, 8, continuous);
         d->matchTable->setCellWidget(row, 9, wrapBtn);
-        d->matchTable->setRowHeight(row, 32);
+        d->matchTable->setRowHeight(row, 44);
     }
 }
 
