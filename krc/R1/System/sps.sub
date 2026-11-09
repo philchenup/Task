@@ -1,0 +1,216 @@
+&ACCESS RVO
+&REL 1
+&COMMENT Robot weld status
+DEF  SPS ( )
+
+  ; Cyclic publisher for RobotGetData and WeldGetData.
+  ; Signal numbers are the $OUT map starting at 3025.
+  ; Low index is LSB. 32-bit signals are IEEE754 binary32.
+  ;
+  ; RG_AXIS_VEL      max |A1..A6| speed, deg/s
+  ; RG_AXIS_ACC      max |A1..A6| accel, deg/s^2
+  ; RG_EXT_AXIS_VEL  max |E1..E3| speed, axis unit/s
+  ; RG_EXT_AXIS_ACC  max |E1..E3| accel, axis unit/s^2
+  ; RG_E1..RG_E3     $AXIS_ACT.E1..E3
+  ; RG_SJ1..RG_SJ6   $AXIS_ACT.A1..A6, deg
+  ; RG_X..RG_C       $POS_ACT in the current tool and base
+  ;
+  ; WG_ARC_STABILITY       = DI_ArcStability
+  ; WG_PS_READY            = DI_WeldingPSReady
+  ; WG_WELDING_PROCESSING  = DI_ArcStability
+  ; WG_REAL_VOLTAGE        = GI_RealVoltage
+  ; WG_REAL_CURRENT        = GI_RealCurrent
+  ; WG_REAL_WIRE_SPEED     = GI_RealWireSpeed
+  ; WG_WIRE_STICKING, WG_WELD_ERROR, WG_MALFUNCTION, WG_ERR_CODE
+  ;   have no source input in $config.dat and are written FALSE / 0.
+  ;
+  ; This submit uses $TIMER[20]. Do not use timer 20 in a robot program.
+
+  DECL INT i
+  DECL INT iDtMs
+  DECL INT iBits
+  DECL INT iSample
+  DECL REAL rDt
+  DECL REAL rTmp
+  DECL REAL rAcc
+  DECL REAL rAxisVel
+  DECL REAL rAxisAcc
+  DECL REAL rExtVel
+  DECL REAL rExtAcc
+  DECL REAL rA[6]
+  DECL REAL rE[3]
+  DECL REAL rV[6]
+  DECL REAL rVE[3]
+  DECL REAL rLastA[6]
+  DECL REAL rLastE[3]
+  DECL REAL rLastV[6]
+  DECL REAL rLastVE[3]
+
+  ;FOLD INIT
+  $TIMER_STOP[20] = FALSE
+  $TIMER[20] = 0
+  iSample = 0
+  rAxisVel = 0.0
+  rAxisAcc = 0.0
+  rExtVel = 0.0
+  rExtAcc = 0.0
+  FOR i = 1 TO 6
+    rLastA[i] = 0.0
+    rLastV[i] = 0.0
+  ENDFOR
+  FOR i = 1 TO 3
+    rLastE[i] = 0.0
+    rLastVE[i] = 0.0
+  ENDFOR
+  ;ENDFOLD (INIT)
+
+  LOOP
+    WAIT FOR NOT($POWER_FAIL)
+    TORQUE_MONITORING()
+
+    ;FOLD USER PLC
+    rA[1] = $AXIS_ACT.A1
+    rA[2] = $AXIS_ACT.A2
+    rA[3] = $AXIS_ACT.A3
+    rA[4] = $AXIS_ACT.A4
+    rA[5] = $AXIS_ACT.A5
+    rA[6] = $AXIS_ACT.A6
+    rE[1] = $AXIS_ACT.E1
+    rE[2] = $AXIS_ACT.E2
+    rE[3] = $AXIS_ACT.E3
+
+    iDtMs = $TIMER[20]
+    IF iDtMs >= 1 THEN
+      $TIMER[20] = 0
+      IF (iSample < 1) OR (iDtMs > 200) THEN
+        FOR i = 1 TO 6
+          rLastA[i] = rA[i]
+          rLastV[i] = 0.0
+        ENDFOR
+        FOR i = 1 TO 3
+          rLastE[i] = rE[i]
+          rLastVE[i] = 0.0
+        ENDFOR
+        rAxisVel = 0.0
+        rAxisAcc = 0.0
+        rExtVel = 0.0
+        rExtAcc = 0.0
+        iSample = 1
+      ELSE
+        rDt = iDtMs / 1000.0
+        rAxisVel = 0.0
+        rAxisAcc = 0.0
+        FOR i = 1 TO 6
+          rV[i] = (rA[i] - rLastA[i]) / rDt
+          IF iSample >= 2 THEN
+            rAcc = (rV[i] - rLastV[i]) / rDt
+            IF ABS(rAcc) > rAxisAcc THEN
+              rAxisAcc = ABS(rAcc)
+            ENDIF
+          ENDIF
+          IF ABS(rV[i]) > rAxisVel THEN
+            rAxisVel = ABS(rV[i])
+          ENDIF
+          rLastA[i] = rA[i]
+          rLastV[i] = rV[i]
+        ENDFOR
+        rExtVel = 0.0
+        rExtAcc = 0.0
+        FOR i = 1 TO 3
+          rVE[i] = (rE[i] - rLastE[i]) / rDt
+          IF iSample >= 2 THEN
+            rAcc = (rVE[i] - rLastVE[i]) / rDt
+            IF ABS(rAcc) > rExtAcc THEN
+              rExtAcc = ABS(rAcc)
+            ENDIF
+          ENDIF
+          IF ABS(rVE[i]) > rExtVel THEN
+            rExtVel = ABS(rVE[i])
+          ENDIF
+          rLastE[i] = rE[i]
+          rLastVE[i] = rVE[i]
+        ENDFOR
+        IF iSample < 2 THEN
+          rAxisAcc = 0.0
+          rExtAcc = 0.0
+          iSample = 2
+        ENDIF
+      ENDIF
+    ENDIF
+
+    rTmp = rAxisVel
+    CAST_TO(iBits, 0, rTmp)
+    RG_AXIS_VEL = iBits
+    rTmp = rAxisAcc
+    CAST_TO(iBits, 0, rTmp)
+    RG_AXIS_ACC = iBits
+    rTmp = rExtVel
+    CAST_TO(iBits, 0, rTmp)
+    RG_EXT_AXIS_VEL = iBits
+    rTmp = rExtAcc
+    CAST_TO(iBits, 0, rTmp)
+    RG_EXT_AXIS_ACC = iBits
+
+    rTmp = rE[1]
+    CAST_TO(iBits, 0, rTmp)
+    RG_E1 = iBits
+    rTmp = rE[2]
+    CAST_TO(iBits, 0, rTmp)
+    RG_E2 = iBits
+    rTmp = rE[3]
+    CAST_TO(iBits, 0, rTmp)
+    RG_E3 = iBits
+
+    rTmp = rA[1]
+    CAST_TO(iBits, 0, rTmp)
+    RG_SJ1 = iBits
+    rTmp = rA[2]
+    CAST_TO(iBits, 0, rTmp)
+    RG_SJ2 = iBits
+    rTmp = rA[3]
+    CAST_TO(iBits, 0, rTmp)
+    RG_SJ3 = iBits
+    rTmp = rA[4]
+    CAST_TO(iBits, 0, rTmp)
+    RG_SJ4 = iBits
+    rTmp = rA[5]
+    CAST_TO(iBits, 0, rTmp)
+    RG_SJ5 = iBits
+    rTmp = rA[6]
+    CAST_TO(iBits, 0, rTmp)
+    RG_SJ6 = iBits
+
+    rTmp = $POS_ACT.X
+    CAST_TO(iBits, 0, rTmp)
+    RG_X = iBits
+    rTmp = $POS_ACT.Y
+    CAST_TO(iBits, 0, rTmp)
+    RG_Y = iBits
+    rTmp = $POS_ACT.Z
+    CAST_TO(iBits, 0, rTmp)
+    RG_Z = iBits
+    rTmp = $POS_ACT.A
+    CAST_TO(iBits, 0, rTmp)
+    RG_A = iBits
+    rTmp = $POS_ACT.B
+    CAST_TO(iBits, 0, rTmp)
+    RG_B = iBits
+    rTmp = $POS_ACT.C
+    CAST_TO(iBits, 0, rTmp)
+    RG_C = iBits
+
+    WG_ARC_STABILITY = DI_ArcStability
+    WG_PS_READY = DI_WeldingPSReady
+    WG_WIRE_STICKING = FALSE
+    WG_WELD_ERROR = FALSE
+    WG_WELDING_PROCESSING = DI_ArcStability
+    WG_MALFUNCTION = FALSE
+    WG_ERR_CODE = 0
+    WG_REAL_VOLTAGE = GI_RealVoltage
+    WG_REAL_CURRENT = GI_RealCurrent
+    WG_REAL_WIRE_SPEED = GI_RealWireSpeed
+    ;ENDFOLD (USER PLC)
+
+  ENDLOOP
+
+END
