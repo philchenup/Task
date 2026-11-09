@@ -1,0 +1,87 @@
+&ACCESS RV
+&REL 1
+;==================================
+; Weld task channel - snippet for $config.dat
+;==================================
+; Paste the two blocks below into $config.dat, inside ;FOLD USER GLOBALS,
+; after the "; Userdefined robot weld comm" signals.
+; This file is not a standalone DEFDAT and must not be loaded as one.
+;
+; The task channel replaces the earlier RS_POINT_COUNT / RS_POINT_INDEX /
+; RS_POINT_STROBE / RS_EXEC_STROBE handshake, which used the same
+; $IN[3745]... space. Remove those four signals before adding these.
+;
+; Budget inside the 3025..4048 limit:
+;   IN   3025..3656  RobotSendRobot  79 bytes
+;        3657..3744  WeldSendData    11 bytes
+;        3745..4048  task channel    38 bytes  (fully used)
+;   OUT  3025..3632  RobotGetData    76 bytes
+;        3633..3696  WeldGetData      8 bytes
+;        3697..3771  task channel ack
+;
+; A whole weld point needs 9 floats = 288 bits, which leaves no room for the
+; header. Point coordinates therefore reuse RS_X..RS_C and RS_E1..RS_E3 of
+; RobotSendRobot, and the task channel only carries the header, the corner
+; distances and the per segment process.
+
+;==================================
+; Weld task channel signals
+;==================================
+
+;DEFINE IN IO
+; header
+SIGNAL TC_CMD $IN[3745]  TO $IN[3752]
+SIGNAL TC_POINT_COUNT $IN[3753]  TO $IN[3760]
+SIGNAL TC_INDEX $IN[3761]  TO $IN[3768]
+SIGNAL TC_POINT_TYPE $IN[3769]  TO $IN[3776]
+SIGNAL TC_TASK_ID $IN[3777]  TO $IN[3792]
+SIGNAL TC_TOGGLE $IN[3793]
+SIGNAL TC_WEAVE_ON $IN[3794]
+SIGNAL TC_ARC_TRACK_ON $IN[3795]
+SIGNAL TC_ABORT $IN[3796]
+; $IN[3797]..$IN[3800] reserved
+; corner payload, valid when TC_CMD = 2, REAL in mm and rpm
+SIGNAL TC_CORNER_PRE $IN[3801]  TO $IN[3832]
+SIGNAL TC_CORNER_POST $IN[3833]  TO $IN[3864]
+SIGNAL TC_CORNER_ROT $IN[3865]  TO $IN[3896]
+; segment payload, valid when TC_CMD = 3, REAL in mm/s, mm and Hz
+SIGNAL TC_SEG_SPEED $IN[3897]  TO $IN[3928]
+SIGNAL TC_WEAVE_AMP $IN[3929]  TO $IN[3960]
+SIGNAL TC_WEAVE_FREQ $IN[3961]  TO $IN[3992]
+SIGNAL TC_SEG_JOB $IN[3993]  TO $IN[4000]
+SIGNAL TC_SEG_WIRE_CORR $IN[4001]  TO $IN[4016]
+SIGNAL TC_SEG_VOLT_CORR $IN[4017]  TO $IN[4032]
+; crater fill length, 0.1 mm per count, valid when TC_CMD = 1
+SIGNAL TC_CRATER_LEN $IN[4033]  TO $IN[4048]
+
+;DEFINE OUT IO
+SIGNAL TC_ACK_CMD $OUT[3697]  TO $OUT[3704]
+SIGNAL TC_ACK_INDEX $OUT[3705]  TO $OUT[3712]
+SIGNAL TC_TASK_STATE $OUT[3713]  TO $OUT[3720]
+SIGNAL TC_ERR_CODE $OUT[3721]  TO $OUT[3728]
+SIGNAL TC_ACK_TASK_ID $OUT[3729]  TO $OUT[3744]
+SIGNAL TC_SEG_ACTIVE $OUT[3745]  TO $OUT[3752]
+SIGNAL TC_POINT_RCVD $OUT[3753]  TO $OUT[3760]
+SIGNAL TC_SEG_RCVD $OUT[3761]  TO $OUT[3768]
+SIGNAL TC_ACK_TOGGLE $OUT[3769]
+SIGNAL TC_TASK_BUSY $OUT[3770]
+SIGNAL TC_ARC_ON $OUT[3771]
+
+;==================================
+; Weld task buffer
+;==================================
+; pc2kuka.src keeps the latched task here. The buffer must be global because
+; the local subprograms of pc2kuka.src cannot see its local variables.
+
+STRUC WELD_PT_T E6POS P,REAL CPRE,CPOST,CROT,INT PTYP,BOOL PVALID
+STRUC WELD_SEG_T REAL SPEED,AMP,FREQ,INT JOB,WIRE,VOLT,BOOL WEAVE,SVALID
+
+DECL WELD_PT_T WT_PT[4]
+DECL WELD_SEG_T WT_SEG[3]
+DECL INT WT_TASK_ID=0
+DECL INT WT_NPT=0
+DECL INT WT_TOOL=1
+DECL INT WT_BASE=0
+DECL INT WT_ERR=0
+DECL REAL WT_CRATER=0.0
+DECL BOOL WT_ABORTED=FALSE

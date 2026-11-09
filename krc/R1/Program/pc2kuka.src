@@ -1,0 +1,590 @@
+&ACCESS RV
+&REL 4
+&PARAM EDITMASK = *
+&PARAM TEMPLATE = C:\KRC\Roboter\Template\vorgabe
+DEF pc2kuka( )
+
+  ; Continuous weld task channel over Profinet.
+  ;
+  ; One telegram per Profinet frame. The PC writes the payload first, then
+  ; flips TC_TOGGLE in a later frame. The robot latches on every toggle edge
+  ; and echoes TC_TOGGLE on TC_ACK_TOGGLE together with the command and index,
+  ; so the PC knows the frame landed before it sends the next one.
+  ;
+  ; TC_CMD  1  begin task   - task id, point count, tool, base, crater length
+  ;         2  write point  - TC_INDEX 1..4, coordinates from RS_X..RS_C and
+  ;                           RS_E1..RS_E3, corner data from TC_CORNER_*
+  ;         3  write segment - TC_INDEX 1..3, process from TC_SEG_* / TC_WEAVE_*
+  ;         4  execute      - validate and weld the whole polyline
+  ;
+  ; TC_TASK_STATE 0 idle, 1 receiving, 3 welding, 4 done, 5 error
+  ; TC_ERR_CODE   1 bad point count, 2 missing point, 3 bad index,
+  ;               4 bad tool or base, 5 missing segment process,
+  ;               6 arc start timeout, 7 aborted, 9 unknown command
+  ;
+  ; n points give n-1 seams. Points 2..n-1 are corners and are stored once.
+  ; The arc is started at point 1 and stays on through every corner.
+  ;
+  ; This program uses $TIMER[21]. The status SPS uses $TIMER[20].
+  ; Outputs TC_* are written only here, RG_* and WG_* only by the SPS.
+
+  DECL INT nCmd
+  DECL INT nIdx
+
+  BAS(#INITMOV,0)
+  $APO.CDIS = 0.0
+  $ADVANCE = 3
+
+  WT_TASK_ID = 0
+  WT_NPT = 0
+  WT_ERR = 0
+  WT_CRATER = 0.0
+  WT_ABORTED = FALSE
+  ClearTask()
+
+  TC_ACK_CMD = 0
+  TC_ACK_INDEX = 0
+  TC_ACK_TASK_ID = 0
+  TC_TASK_STATE = 0
+  TC_ERR_CODE = 0
+  TC_SEG_ACTIVE = 0
+  TC_TASK_BUSY = FALSE
+  TC_ARC_ON = FALSE
+  TC_ACK_TOGGLE = TC_TOGGLE
+
+  INTERRUPT DECL 25 WHEN TC_ABORT==TRUE DO TaskAbort()
+  INTERRUPT ON 25
+
+  LOOP
+    IF WT_ABORTED THEN
+      WAIT FOR NOT(TC_ABORT)
+      WT_ABORTED = FALSE
+      TC_TASK_STATE = 0
+      INTERRUPT ON 25
+    ENDIF
+
+    WAIT FOR (TC_TOGGLE <> TC_ACK_TOGGLE)
+    nCmd = TC_CMD
+    nIdx = TC_INDEX
+
+    SWITCH nCmd
+    CASE 1
+      TaskBegin()
+    CASE 2
+      TaskPoint(nIdx)
+    CASE 3
+      TaskSegment(nIdx)
+    CASE 4
+      TaskExec()
+    DEFAULT
+      WT_ERR = 9
+      TC_ERR_CODE = 9
+      TC_TASK_STATE = 5
+    ENDSWITCH
+
+    TC_ACK_CMD = nCmd
+    TC_ACK_INDEX = nIdx
+    TC_ACK_TASK_ID = WT_TASK_ID
+    TC_ACK_TOGGLE = TC_TOGGLE
+  ENDLOOP
+
+END
+
+;==================================
+; Task buffer handling
+;==================================
+
+DEF ClearTask()
+  DECL INT i
+  FOR i = 1 TO 4
+    WT_PT[i].PVALID = FALSE
+    WT_PT[i].PTYP = 0
+    WT_PT[i].CPRE = 0.0
+    WT_PT[i].CPOST = 0.0
+    WT_PT[i].CROT = 0.0
+  ENDFOR
+  FOR i = 1 TO 3
+    WT_SEG[i].SVALID = FALSE
+    WT_SEG[i].SPEED = 0.0
+    WT_SEG[i].AMP = 0.0
+    WT_SEG[i].FREQ = 0.0
+    WT_SEG[i].JOB = 0
+    WT_SEG[i].WIRE = 0
+    WT_SEG[i].VOLT = 0
+    WT_SEG[i].WEAVE = FALSE
+  ENDFOR
+  TC_POINT_RCVD = 0
+  TC_SEG_RCVD = 0
+END
+
+DEF TaskBegin()
+  WT_TASK_ID = TC_TASK_ID
+  WT_NPT = TC_POINT_COUNT
+  WT_TOOL = RS_TOOL_ID
+  WT_BASE = RS_BASE_ID
+  WT_CRATER = TC_CRATER_LEN / 10.0
+  WT_ERR = 0
+  ClearTask()
+  TC_SEG_ACTIVE = 0
+  IF (WT_NPT < 2) OR (WT_NPT > 4) THEN
+    WT_ERR = 1
+    TC_ERR_CODE = 1
+    TC_TASK_STATE = 5
+  ELSE
+    TC_ERR_CODE = 0
+    TC_TASK_STATE = 1
+  ENDIF
+END
+
+DEF TaskPoint(nIdx:IN)
+  DECL INT nIdx
+  DECL INT i
+  DECL INT n
+
+  IF (nIdx < 1) OR (nIdx > 4) THEN
+    WT_ERR = 3
+    TC_ERR_CODE = 3
+    TC_TASK_STATE = 5
+    RETURN
+  ENDIF
+
+  ; S and T are not in the telegram, so the current turn and status are kept
+  WT_PT[nIdx].P = $POS_ACT
+  WT_PT[nIdx].P.X = BitsToReal(RS_X)
+  WT_PT[nIdx].P.Y = BitsToReal(RS_Y)
+  WT_PT[nIdx].P.Z = BitsToReal(RS_Z)
+  WT_PT[nIdx].P.A = BitsToReal(RS_A)
+  WT_PT[nIdx].P.B = BitsToReal(RS_B)
+  WT_PT[nIdx].P.C = BitsToReal(RS_C)
+  WT_PT[nIdx].P.E1 = BitsToReal(RS_E1)
+  WT_PT[nIdx].P.E2 = BitsToReal(RS_E2)
+  WT_PT[nIdx].P.E3 = BitsToReal(RS_E3)
+  WT_PT[nIdx].PTYP = TC_POINT_TYPE
+  WT_PT[nIdx].CPRE = BitsToReal(TC_CORNER_PRE)
+  WT_PT[nIdx].CPOST = BitsToReal(TC_CORNER_POST)
+  WT_PT[nIdx].CROT = BitsToReal(TC_CORNER_ROT)
+  WT_PT[nIdx].PVALID = TRUE
+
+  n = 0
+  FOR i = 1 TO 4
+    IF WT_PT[i].PVALID THEN
+      n = n + 1
+    ENDIF
+  ENDFOR
+  TC_POINT_RCVD = n
+  TC_TASK_STATE = 1
+END
+
+DEF TaskSegment(nIdx:IN)
+  DECL INT nIdx
+  DECL INT i
+  DECL INT n
+
+  IF (nIdx < 1) OR (nIdx > 3) THEN
+    WT_ERR = 3
+    TC_ERR_CODE = 3
+    TC_TASK_STATE = 5
+    RETURN
+  ENDIF
+
+  WT_SEG[nIdx].SPEED = BitsToReal(TC_SEG_SPEED)
+  WT_SEG[nIdx].AMP = BitsToReal(TC_WEAVE_AMP)
+  WT_SEG[nIdx].FREQ = BitsToReal(TC_WEAVE_FREQ)
+  WT_SEG[nIdx].JOB = TC_SEG_JOB
+  WT_SEG[nIdx].WIRE = TC_SEG_WIRE_CORR
+  WT_SEG[nIdx].VOLT = TC_SEG_VOLT_CORR
+  WT_SEG[nIdx].WEAVE = TC_WEAVE_ON
+  WT_SEG[nIdx].SVALID = TRUE
+
+  n = 0
+  FOR i = 1 TO 3
+    IF WT_SEG[i].SVALID THEN
+      n = n + 1
+    ENDIF
+  ENDFOR
+  TC_SEG_RCVD = n
+  TC_TASK_STATE = 1
+END
+
+;==================================
+; Execution
+;==================================
+
+DEF TaskExec()
+  DECL INT i
+  DECL INT nSeg
+  DECL REAL rLen
+  DECL REAL rF
+  DECL E6POS pCur
+  DECL E6POS pTgt
+
+  WT_ERR = 0
+  IF (WT_NPT < 2) OR (WT_NPT > 4) THEN
+    WT_ERR = 1
+  ENDIF
+  IF WT_ERR == 0 THEN
+    FOR i = 1 TO WT_NPT
+      IF NOT(WT_PT[i].PVALID) THEN
+        WT_ERR = 2
+      ENDIF
+    ENDFOR
+  ENDIF
+  IF WT_ERR == 0 THEN
+    FOR i = 1 TO WT_NPT - 1
+      IF NOT(WT_SEG[i].SVALID) THEN
+        WT_ERR = 5
+      ENDIF
+    ENDFOR
+  ENDIF
+  IF WT_ERR == 0 THEN
+    IF (WT_TOOL < 1) OR (WT_TOOL > 16) OR (WT_BASE < 0) OR (WT_BASE > 32) THEN
+      WT_ERR = 4
+    ENDIF
+  ENDIF
+  IF WT_ERR <> 0 THEN
+    TC_ERR_CODE = WT_ERR
+    TC_TASK_STATE = 5
+    RETURN
+  ENDIF
+
+  nSeg = WT_NPT - 1
+  TC_ERR_CODE = 0
+  TC_TASK_STATE = 3
+  TC_TASK_BUSY = TRUE
+
+  BAS(#TOOL,WT_TOOL)
+  BAS(#BASE,WT_BASE)
+  BAS(#VEL_PTP,30)
+  $APO.CDIS = 0.0
+
+  pCur = WT_PT[1].P
+  pTgt = pCur
+  PTP pTgt
+
+  ArcOn(1)
+  IF WT_ERR <> 0 THEN
+    ArcOff()
+    TC_ERR_CODE = WT_ERR
+    TC_TASK_STATE = 5
+    TC_TASK_BUSY = FALSE
+    TC_SEG_ACTIVE = 0
+    RETURN
+  ENDIF
+
+  FOR i = 1 TO nSeg
+    TC_SEG_ACTIVE = i
+    SetSegProc(i)
+
+    ; straight part of this seam, cut short by the corner approach distance
+    pTgt = WT_PT[i+1].P
+    IF i < nSeg THEN
+      rLen = PosDist(WT_PT[i].P,WT_PT[i+1].P)
+      IF (WT_PT[i+1].CPRE > 0.1) AND (rLen > WT_PT[i+1].CPRE) THEN
+        rF = 1.0 - (WT_PT[i+1].CPRE / rLen)
+        LerpPos(WT_PT[i].P,WT_PT[i+1].P,rF,pTgt)
+      ENDIF
+    ENDIF
+    WeldLine(i,pCur,pTgt)
+    pCur = pTgt
+
+    IF i < nSeg THEN
+      ; corner keeps the speed of this seam and limits the reorientation rate
+      SetCornerProc(i+1)
+      pTgt = WT_PT[i+1].P
+      LIN pTgt
+      pCur = pTgt
+      rLen = PosDist(WT_PT[i+1].P,WT_PT[i+2].P)
+      IF (WT_PT[i+1].CPOST > 0.1) AND (rLen > WT_PT[i+1].CPOST) THEN
+        rF = WT_PT[i+1].CPOST / rLen
+        LerpPos(WT_PT[i+1].P,WT_PT[i+2].P,rF,pTgt)
+        LIN pTgt
+        pCur = pTgt
+      ENDIF
+    ENDIF
+  ENDFOR
+
+  ; crater fill, weld back along the last seam before the arc goes off
+  IF WT_CRATER > 0.1 THEN
+    rLen = PosDist(WT_PT[WT_NPT-1].P,WT_PT[WT_NPT].P)
+    IF rLen > WT_CRATER THEN
+      rF = 1.0 - (WT_CRATER / rLen)
+      LerpPos(WT_PT[WT_NPT-1].P,WT_PT[WT_NPT].P,rF,pTgt)
+      LIN pTgt
+      pCur = pTgt
+    ENDIF
+  ENDIF
+
+  ArcOff()
+  TC_SEG_ACTIVE = 0
+  TC_TASK_BUSY = FALSE
+  TC_TASK_STATE = 4
+END
+
+DEF TaskAbort()
+  INTERRUPT OFF 25
+  BRAKE
+  EWM_WELDING = FALSE
+  EWM_GAS = FALSE
+  EWM_ROBOTOK = FALSE
+  TC_ARC_ON = FALSE
+  WT_ABORTED = TRUE
+  WT_ERR = 7
+  TC_ERR_CODE = 7
+  TC_TASK_STATE = 5
+  TC_SEG_ACTIVE = 0
+  TC_TASK_BUSY = FALSE
+  RESUME
+END
+
+;==================================
+; Motion and process
+;==================================
+
+DEF WeldLine(nS:IN,pA:IN,pB:IN)
+  DECL INT nS
+  DECL E6POS pA
+  DECL E6POS pB
+  DECL E6POS pW
+  DECL E6POS pTgt
+  DECL FRAME fOff
+  DECL INT nSteps
+  DECL INT i
+  DECL REAL rLen
+  DECL REAL rHalf
+  DECL REAL rF
+  DECL REAL rAmp
+
+  rLen = PosDist(pA,pB)
+  rAmp = WT_SEG[nS].AMP
+
+  IF NOT(WT_SEG[nS].WEAVE) OR (rAmp < 0.1) OR (WT_SEG[nS].FREQ < 0.1) OR (rLen < 1.0) THEN
+    pTgt = pB
+    LIN pTgt
+    RETURN
+  ENDIF
+
+  ; half a weave period in mm of travel
+  rHalf = WT_SEG[nS].SPEED / (2.0 * WT_SEG[nS].FREQ)
+  IF rHalf < 0.5 THEN
+    rHalf = 0.5
+  ENDIF
+  nSteps = rLen / rHalf
+  IF nSteps < 2 THEN
+    pTgt = pB
+    LIN pTgt
+    RETURN
+  ENDIF
+
+  ; the weave is a local Y offset of the point frame, so the PC must send
+  ; orientations whose local X runs along the travel direction
+  fOff = {X 0.0,Y 0.0,Z 0.0,A 0.0,B 0.0,C 0.0}
+  $APO.CDIS = rAmp * 0.5
+  FOR i = 1 TO nSteps - 1
+    rF = i
+    rF = rF / nSteps
+    LerpPos(pA,pB,rF,pW)
+    IF (i - (i / 2) * 2) == 1 THEN
+      fOff.Y = rAmp
+    ELSE
+      fOff.Y = -rAmp
+    ENDIF
+    pTgt = pW : fOff
+    LIN pTgt C_DIS
+  ENDFOR
+  $APO.CDIS = 0.0
+  pTgt = pB
+  LIN pTgt
+END
+
+DEF SetSegProc(nS:IN)
+  DECL INT nS
+  DECL REAL rV
+
+  rV = WT_SEG[nS].SPEED / 1000.0
+  IF rV < 0.001 THEN
+    rV = 0.001
+  ENDIF
+  IF rV > 2.0 THEN
+    rV = 2.0
+  ENDIF
+  $VEL.CP = rV
+  $ACC.CP = 2.3
+  $VEL.ORI1 = 200.0
+  $VEL.ORI2 = 200.0
+  $ACC.ORI1 = 100.0
+  $ACC.ORI2 = 100.0
+
+  EWM_WELD_JOB = WT_SEG[nS].JOB
+  EWM_WIRE_SPEED = WT_SEG[nS].WIRE
+  ; TC_SEG_VOLT_CORR has no matching EWM output in $config.dat
+END
+
+DEF SetCornerProc(nP:IN)
+  DECL INT nP
+  DECL REAL rOri
+
+  ; rpm to deg/s
+  rOri = WT_PT[nP].CROT * 6.0
+  IF rOri < 1.0 THEN
+    rOri = 1.0
+  ENDIF
+  IF rOri > 200.0 THEN
+    rOri = 200.0
+  ENDIF
+  $VEL.ORI1 = rOri
+  $VEL.ORI2 = rOri
+END
+
+DEF ArcOn(nS:IN)
+  DECL INT nS
+
+  EWM_EXTERNAL_CTRL_ENABLE = TRUE
+  EWM_WELD_MODE = TRUE
+  EWM_ROBOTOK = TRUE
+  EWM_WELD_JOB = WT_SEG[nS].JOB
+  EWM_WIRE_SPEED = WT_SEG[nS].WIRE
+  EWM_GAS = TRUE
+  WAIT SEC 0.3
+  EWM_WELDING = TRUE
+  TC_ARC_ON = TRUE
+
+  $TIMER_STOP[21] = TRUE
+  $TIMER[21] = 0
+  $TIMER_STOP[21] = FALSE
+  WAIT FOR (DI_ArcStability) OR ($TIMER[21] > 3000)
+  $TIMER_STOP[21] = TRUE
+  IF NOT(DI_ArcStability) THEN
+    WT_ERR = 6
+  ENDIF
+END
+
+DEF ArcOff()
+  EWM_WELDING = FALSE
+  TC_ARC_ON = FALSE
+  WAIT SEC 0.3
+  EWM_GAS = FALSE
+  EWM_ROBOTOK = FALSE
+END
+
+;==================================
+; Helpers
+;==================================
+
+DEF LerpPos(pA:IN,pB:IN,rF:IN,pR:OUT)
+  DECL E6POS pA
+  DECL E6POS pB
+  DECL E6POS pR
+  DECL REAL rF
+
+  pR = pA
+  pR.X = pA.X + (pB.X - pA.X) * rF
+  pR.Y = pA.Y + (pB.Y - pA.Y) * rF
+  pR.Z = pA.Z + (pB.Z - pA.Z) * rF
+  pR.A = pA.A + (pB.A - pA.A) * rF
+  pR.B = pA.B + (pB.B - pA.B) * rF
+  pR.C = pA.C + (pB.C - pA.C) * rF
+  pR.E1 = pA.E1 + (pB.E1 - pA.E1) * rF
+  pR.E2 = pA.E2 + (pB.E2 - pA.E2) * rF
+  pR.E3 = pA.E3 + (pB.E3 - pA.E3) * rF
+END
+
+DEFFCT REAL PosDist(pA:IN,pB:IN)
+  DECL E6POS pA
+  DECL E6POS pB
+  DECL REAL dx
+  DECL REAL dy
+  DECL REAL dz
+
+  dx = pB.X - pA.X
+  dy = pB.Y - pA.Y
+  dz = pB.Z - pA.Z
+  RETURN SQRT(dx * dx + dy * dy + dz * dz)
+ENDFCT
+
+DEFFCT REAL Pow2(nE:IN)
+  DECL INT nE
+  DECL INT i
+  DECL REAL r
+
+  r = 1.0
+  IF nE > 0 THEN
+    FOR i = 1 TO nE
+      r = r * 2.0
+    ENDFOR
+  ENDIF
+  IF nE < 0 THEN
+    FOR i = 1 TO -nE
+      r = r / 2.0
+    ENDFOR
+  ENDIF
+  RETURN r
+ENDFCT
+
+DEFFCT REAL BitsToReal(nRaw:IN)
+  ; IEEE754 binary32 bit pattern to REAL, done with integer math so that no
+  ; CAST_TO buffer is needed
+  DECL INT nRaw
+  DECL INT nExp
+  DECL INT nMant
+  DECL REAL rMant
+  DECL REAL rVal
+
+  nExp = (nRaw B_AND 2139095040) / 8388608
+  nMant = nRaw B_AND 8388607
+  IF nExp > 254 THEN
+    RETURN 0.0
+  ENDIF
+  rMant = nMant
+  rMant = rMant / 8388608.0
+  IF nExp == 0 THEN
+    rVal = rMant * Pow2(-126)
+  ELSE
+    rVal = (1.0 + rMant) * Pow2(nExp - 127)
+  ENDIF
+  IF nRaw < 0 THEN
+    rVal = -rVal
+  ENDIF
+  RETURN rVal
+ENDFCT
+
+DEFFCT INT RealToBits(rVal:IN)
+  ; REAL to IEEE754 binary32 bit pattern, the inverse of BitsToReal
+  DECL REAL rVal
+  DECL REAL rAbs
+  DECL INT nSign
+  DECL INT nExp
+  DECL INT nMant
+  DECL INT nRaw
+
+  nSign = 0
+  rAbs = rVal
+  IF rAbs < 0.0 THEN
+    nSign = 1
+    rAbs = -rAbs
+  ENDIF
+  IF rAbs < Pow2(-126) THEN
+    RETURN 0
+  ENDIF
+  nExp = 127
+  WHILE rAbs >= 2.0
+    rAbs = rAbs / 2.0
+    nExp = nExp + 1
+  ENDWHILE
+  WHILE rAbs < 1.0
+    rAbs = rAbs * 2.0
+    nExp = nExp - 1
+  ENDWHILE
+  IF nExp > 254 THEN
+    nExp = 254
+    rAbs = 1.9999999
+  ENDIF
+  nMant = (rAbs - 1.0) * 8388608.0
+  IF nMant > 8388607 THEN
+    nMant = 8388607
+  ENDIF
+  nRaw = nExp * 8388608 + nMant
+  IF nSign == 1 THEN
+    nRaw = nRaw B_OR (B_NOT 2147483647)
+  ENDIF
+  RETURN nRaw
+ENDFCT
