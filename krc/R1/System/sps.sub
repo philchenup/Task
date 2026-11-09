@@ -26,6 +26,7 @@ DEF  SPS ( )
   ; RG_PRO_STATE     1 free, 2 reset, 3 active, 4 stop, 5 end
   ; RG_ACT_TOOL/BASE the tool and base the task channel last applied
   ; RG_HEARTBEAT     frame counter, lets the PC detect a frozen image
+  ; RG_PC_LINK_OK    RS_PC_ALIVE has changed within the last 2 s
   ;
   ; WG_ARC_STABILITY       = DI_ArcStability
   ; WG_PS_READY            = DI_WeldingPSReady
@@ -36,12 +37,14 @@ DEF  SPS ( )
   ; WG_WIRE_STICKING, WG_WELD_ERROR, WG_MALFUNCTION, WG_ERR_CODE
   ;   have no source input in $config.dat and are written FALSE / 0.
   ;
-  ; This submit uses $TIMER[20]. Do not use timer 20 in a robot program.
+  ; This submit uses $TIMER[20] and $TIMER[22]. Do not use those timers in a
+  ; robot program.
 
   DECL INT i
   DECL INT iDtMs
   DECL INT iSample
   DECL INT iBeat
+  DECL BOOL bLastAlive
   DECL REAL rDt
   DECL REAL rAcc
   DECL REAL rAxisVel
@@ -60,6 +63,9 @@ DEF  SPS ( )
   ;FOLD INIT
   $TIMER_STOP[20] = FALSE
   $TIMER[20] = 0
+  $TIMER_STOP[22] = FALSE
+  $TIMER[22] = 0
+  bLastAlive = RS_PC_ALIVE
   iSample = 0
   iBeat = 0
   rAxisVel = 0.0
@@ -216,6 +222,12 @@ DEF  SPS ( )
     RG_MOVE_ENABLE = $MOVE_ENABLE
     RG_STOPMESS = $STOPMESS
     RG_ROBOT_READY = $PERI_RDY AND $MOVE_ENABLE AND NOT($STOPMESS)
+
+    IF RS_PC_ALIVE <> bLastAlive THEN
+      bLastAlive = RS_PC_ALIVE
+      $TIMER[22] = 0
+    ENDIF
+    RG_PC_LINK_OK = $TIMER[22] < 2000
 
     iBeat = iBeat + 1
     IF iBeat > 65535 THEN

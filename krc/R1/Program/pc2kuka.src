@@ -4,52 +4,55 @@
 &PARAM TEMPLATE = C:\KRC\Roboter\Template\vorgabe
 DEF pc2kuka( )
 
-  ; Continuous weld task channel over Profinet.
+  ; Continuous weld task channel over Profinet, $IN[3057]..$IN[4048].
   ;
-  ; One telegram per Profinet frame, a fixed header plus ten 32 bit data
-  ; words. The PC writes the payload first, then flips TC_TOGGLE in a later
-  ; frame, because the output image is written with several calls and is not
-  ; updated atomically. The robot latches on every toggle edge and echoes the
-  ; toggle, the command, the index and the frame number, so the PC knows the
-  ; frame landed before it sends the next one.
+  ; A task is a chain of up to 4 seams, so up to 5 points, and needs 333
+  ; bytes of data. The image holds 124, so the telegram is paged into three
+  ; fixed pages. TC_CMD says which page the payload holds, and every field
+  ; has a fixed place inside its page, so there is no per item index.
   ;
-  ; TC_CMD 1 begin task   2 point   3 corner   4 segment   5 execute   6 clear
-  ; The word layout per command is documented in config_weld_task.dat.
+  ;   TC_CMD 1  points 1, 2, 3
+  ;   TC_CMD 2  points 4, 5 and the corners at points 2, 3, 4
+  ;   TC_CMD 3  the four seam processes and the task parameters
+  ;   TC_CMD 4  execute
+  ;   TC_CMD 5  clear
   ;
-  ; TC_TASK_STATE 0 idle, 1 receiving, 2 ready, 3 welding, 4 done, 5 error
-  ; TC_ERR_CODE   1 bad point count, 2 missing point, 3 bad index,
-  ;               4 bad tool or base, 5 missing segment process,
-  ;               6 arc start timeout, 7 aborted, 8 missing corner,
-  ;               9 unknown command
+  ; The PC writes the payload first and flips TC_TOGGLE in a later frame,
+  ; because the output image is written with several calls and is not updated
+  ; atomically. The robot latches on every toggle edge and echoes the toggle,
+  ; the command and the frame number, so the PC knows the page landed before
+  ; it sends the next one. A whole task is four frames, 0.2 s at a 50 ms
+  ; cycle.
   ;
-  ; n points give n-1 seams. Points 2..n-1 are corners and are stored once.
-  ; The arc is started at point 1 and stays on through every corner.
+  ; Page 1 and page 3 are always required. Page 2 is required from 2 seams up,
+  ; because that is where the corner parameters live. TC_SEAM_COUNT 0 means
+  ; move to point 1 and do not strike an arc.
   ;
   ; This program never writes EWM_*. It requests the arc through WT_ARC_REQ
   ; and WT_ACT_*, and sps.sub is the only writer of the welder outputs.
   ; This program uses $TIMER[21]. The status SPS uses $TIMER[20].
 
   DECL INT nCmd
-  DECL INT nIdx
 
   BAS(#INITMOV,0)
   $APO.CDIS = 0.0
   $ADVANCE = 3
 
   WT_TASK_ID = 0
+  WT_NSEAM = 0
   WT_NPT = 0
+  WT_TOOL = 1
+  WT_BASE = 0
+  WT_STEP = 2
   WT_ERR = 0
-  WT_CRATER = 0.0
-  WT_APPROACH = 50.0
-  WT_AIRSPEED = 500.0
   WT_ABORTED = FALSE
   WT_ARC_REQ = FALSE
   WT_GAS_REQ = FALSE
   ClearTask()
 
   TC_ACK_CMD = 0
-  TC_ACK_INDEX = 0
   TC_ACK_TASK_ID = 0
+  TC_ACK_SEAM_COUNT = 0
   TC_ACK_FRAME_NO = 0
   TC_TASK_STATE = 0
   TC_ERR_CODE = 0
@@ -70,34 +73,49 @@ DEF pc2kuka( )
       INTERRUPT ON 25
     ENDIF
 
-    WAIT FOR (TC_TOGGLE <> TC_ACK_TOGGLE)
+    ; the control header works outside the page handshake, so a reset or a
+    ; move home does not need a task
+    WAIT FOR (TC_TOGGLE <> TC_ACK_TOGGLE) OR RS_RESET OR RS_GOTO_HOME
+
+    IF RS_RESET THEN
+      WT_ERR = 0
+      TC_ERR_CODE = 0
+      TC_TASK_STATE = 0
+      WAIT FOR NOT(RS_RESET)
+      CONTINUE
+    ENDIF
+
+    IF RS_GOTO_HOME THEN
+      GoHome()
+      WAIT FOR NOT(RS_GOTO_HOME)
+      CONTINUE
+    ENDIF
+
     nCmd = TC_CMD
-    nIdx = TC_INDEX
 
     SWITCH nCmd
     CASE 1
-      TaskBegin()
+      ReadPage1()
     CASE 2
-      TaskPoint(nIdx)
+      ReadPage2()
     CASE 3
-      TaskCorner(nIdx)
+      ReadPage3()
     CASE 4
-      TaskSegment(nIdx)
-    CASE 5
       TaskExec()
-    CASE 6
+    CASE 5
       ClearTask()
+      WT_ERR = 0
       TC_ERR_CODE = 0
       TC_TASK_STATE = 0
     DEFAULT
-      WT_ERR = 9
-      TC_ERR_CODE = 9
+      WT_ERR = 6
+      TC_ERR_CODE = 6
       TC_TASK_STATE = 5
     ENDSWITCH
 
     TC_ACK_CMD = nCmd
-    TC_ACK_INDEX = nIdx
     TC_ACK_TASK_ID = WT_TASK_ID
+    TC_ACK_SEAM_COUNT = WT_NSEAM
     TC_ACK_FRAME_NO = TC_FRAME_NO
     TC_ACK_TOGGLE = TC_TOGGLE
   ENDLOOP
@@ -105,14 +123,14 @@ DEF pc2kuka( )
 END
 
 ;==================================
-; Task buffer handling
+; Buffer handling
 ;==================================
 
 DEF ClearTask()
   DECL INT i
+
   FOR i = 1 TO WT_MAXPT
     WT_PT[i].PVALID = FALSE
-    WT_PT[i].PTYP = 0
     WT_PT[i].CPRE = 0.0
     WT_PT[i].CPOST = 0.0
     WT_PT[i].CROT = 0.0
@@ -129,122 +147,222 @@ DEF ClearTask()
     WT_SEG[i].DYN = 0
     WT_SEG[i].WEAVE = FALSE
   ENDFOR
-  TC_POINT_RCVD = 0
-  TC_SEG_RCVD = 0
+  TC_PAGE_MASK = 0
+  TC_SEG_ACTIVE = 0
   TC_PROGRESS = 0
 END
 
-DEF TaskBegin()
+DEF NewTask()
+  ; a page 1 frame starts a new task, so the header is taken from it and the
+  ; buffer is cleared before the points are stored
   WT_TASK_ID = TC_TASK_ID
-  WT_NPT = TC_POINT_COUNT
-  WT_TOOL = TC_W1
-  WT_BASE = TC_W2
-  WT_CRATER = BitsToReal(TC_W3)
-  WT_APPROACH = BitsToReal(TC_W4)
-  WT_AIRSPEED = BitsToReal(TC_W5)
+  WT_NSEAM = TC_SEAM_COUNT
+  WT_NPT = TC_SEAM_COUNT + 1
+  WT_TOOL = RS_TOOL_ID
+  WT_BASE = RS_BASE_ID
+  WT_STEP = RS_STEP_MODE
   WT_ERR = 0
   ClearTask()
-  TC_SEG_ACTIVE = 0
-  IF (WT_NPT < 2) OR (WT_NPT > WT_MAXPT) THEN
+END
+
+DEF ReadPage1()
+  NewTask()
+
+  IF (WT_NSEAM < 0) OR (WT_NSEAM > WT_MAXPT - 1) THEN
     WT_ERR = 1
     TC_ERR_CODE = 1
     TC_TASK_STATE = 5
-  ELSE
-    TC_ERR_CODE = 0
-    TC_TASK_STATE = 1
-  ENDIF
-END
-
-DEF TaskPoint(nIdx:IN)
-  DECL INT nIdx
-  DECL INT i
-  DECL INT n
-  DECL INT nST
-
-  IF (nIdx < 1) OR (nIdx > WT_MAXPT) THEN
-    WT_ERR = 3
-    TC_ERR_CODE = 3
-    TC_TASK_STATE = 5
     RETURN
   ENDIF
 
-  WT_PT[nIdx].P.X = BitsToReal(TC_W1)
-  WT_PT[nIdx].P.Y = BitsToReal(TC_W2)
-  WT_PT[nIdx].P.Z = BitsToReal(TC_W3)
-  WT_PT[nIdx].P.A = BitsToReal(TC_W4)
-  WT_PT[nIdx].P.B = BitsToReal(TC_W5)
-  WT_PT[nIdx].P.C = BitsToReal(TC_W6)
-  WT_PT[nIdx].P.E1 = BitsToReal(TC_W7)
-  WT_PT[nIdx].P.E2 = BitsToReal(TC_W8)
-  WT_PT[nIdx].P.E3 = BitsToReal(TC_W9)
-  WT_PT[nIdx].P.E4 = $AXIS_ACT.E4
-  WT_PT[nIdx].P.E5 = $AXIS_ACT.E5
-  WT_PT[nIdx].P.E6 = $AXIS_ACT.E6
+  ; point 1 is always present, points 2 and 3 only if the chain is long enough
+  WT_PT[1].P.X = BitsToReal(TC_P1_X)
+  WT_PT[1].P.Y = BitsToReal(TC_P1_Y)
+  WT_PT[1].P.Z = BitsToReal(TC_P1_Z)
+  WT_PT[1].P.A = BitsToReal(TC_P1_A)
+  WT_PT[1].P.B = BitsToReal(TC_P1_B)
+  WT_PT[1].P.C = BitsToReal(TC_P1_C)
+  WT_PT[1].P.E1 = BitsToReal(TC_P1_E1)
+  WT_PT[1].P.E2 = BitsToReal(TC_P1_E2)
+  WT_PT[1].P.E3 = BitsToReal(TC_P1_E3)
+  WT_PT[1].P.E4 = $AXIS_ACT.E4
+  WT_PT[1].P.E5 = $AXIS_ACT.E5
+  WT_PT[1].P.E6 = $AXIS_ACT.E6
+  WT_PT[1].P.S = TC_P1_S
+  WT_PT[1].P.T = TC_P1_T
+  WT_PT[1].PVALID = TRUE
 
-  ; status and turn decide the arm configuration, so the PC has to send them
-  nST = TC_W10
-  WT_PT[nIdx].P.S = nST B_AND 255
-  WT_PT[nIdx].P.T = (nST B_AND 65280) / 256
+  IF WT_NPT >= 2 THEN
+    WT_PT[2].P.X = BitsToReal(TC_P2_X)
+    WT_PT[2].P.Y = BitsToReal(TC_P2_Y)
+    WT_PT[2].P.Z = BitsToReal(TC_P2_Z)
+    WT_PT[2].P.A = BitsToReal(TC_P2_A)
+    WT_PT[2].P.B = BitsToReal(TC_P2_B)
+    WT_PT[2].P.C = BitsToReal(TC_P2_C)
+    WT_PT[2].P.E1 = BitsToReal(TC_P2_E1)
+    WT_PT[2].P.E2 = BitsToReal(TC_P2_E2)
+    WT_PT[2].P.E3 = BitsToReal(TC_P2_E3)
+    WT_PT[2].P.E4 = $AXIS_ACT.E4
+    WT_PT[2].P.E5 = $AXIS_ACT.E5
+    WT_PT[2].P.E6 = $AXIS_ACT.E6
+    WT_PT[2].P.S = TC_P2_S
+    WT_PT[2].P.T = TC_P2_T
+    WT_PT[2].PVALID = TRUE
+  ENDIF
 
-  WT_PT[nIdx].PTYP = TC_POINT_TYPE
-  WT_PT[nIdx].PVALID = TRUE
+  IF WT_NPT >= 3 THEN
+    WT_PT[3].P.X = BitsToReal(TC_P3_X)
+    WT_PT[3].P.Y = BitsToReal(TC_P3_Y)
+    WT_PT[3].P.Z = BitsToReal(TC_P3_Z)
+    WT_PT[3].P.A = BitsToReal(TC_P3_A)
+    WT_PT[3].P.B = BitsToReal(TC_P3_B)
+    WT_PT[3].P.C = BitsToReal(TC_P3_C)
+    WT_PT[3].P.E1 = BitsToReal(TC_P3_E1)
+    WT_PT[3].P.E2 = BitsToReal(TC_P3_E2)
+    WT_PT[3].P.E3 = BitsToReal(TC_P3_E3)
+    WT_PT[3].P.E4 = $AXIS_ACT.E4
+    WT_PT[3].P.E5 = $AXIS_ACT.E5
+    WT_PT[3].P.E6 = $AXIS_ACT.E6
+    WT_PT[3].P.S = TC_P3_S
+    WT_PT[3].P.T = TC_P3_T
+    WT_PT[3].PVALID = TRUE
+  ENDIF
 
-  n = 0
-  FOR i = 1 TO WT_MAXPT
-    IF WT_PT[i].PVALID THEN
-      n = n + 1
-    ENDIF
-  ENDFOR
-  TC_POINT_RCVD = n
+  TC_PAGE_MASK = TC_PAGE_MASK B_OR 1
+  TC_ERR_CODE = 0
   TC_TASK_STATE = 1
 END
 
-DEF TaskCorner(nIdx:IN)
-  DECL INT nIdx
-
-  IF (nIdx < 2) OR (nIdx > WT_MAXPT - 1) THEN
-    WT_ERR = 3
-    TC_ERR_CODE = 3
+DEF ReadPage2()
+  IF TC_TASK_ID <> WT_TASK_ID THEN
+    WT_ERR = 2
+    TC_ERR_CODE = 2
     TC_TASK_STATE = 5
     RETURN
   ENDIF
 
-  WT_PT[nIdx].CPRE = BitsToReal(TC_W1)
-  WT_PT[nIdx].CPOST = BitsToReal(TC_W2)
-  WT_PT[nIdx].CROT = BitsToReal(TC_W3)
-  WT_PT[nIdx].CDWELL = BitsToReal(TC_W4)
+  IF WT_NPT >= 4 THEN
+    WT_PT[4].P.X = BitsToReal(TC_P4_X)
+    WT_PT[4].P.Y = BitsToReal(TC_P4_Y)
+    WT_PT[4].P.Z = BitsToReal(TC_P4_Z)
+    WT_PT[4].P.A = BitsToReal(TC_P4_A)
+    WT_PT[4].P.B = BitsToReal(TC_P4_B)
+    WT_PT[4].P.C = BitsToReal(TC_P4_C)
+    WT_PT[4].P.E1 = BitsToReal(TC_P4_E1)
+    WT_PT[4].P.E2 = BitsToReal(TC_P4_E2)
+    WT_PT[4].P.E3 = BitsToReal(TC_P4_E3)
+    WT_PT[4].P.E4 = $AXIS_ACT.E4
+    WT_PT[4].P.E5 = $AXIS_ACT.E5
+    WT_PT[4].P.E6 = $AXIS_ACT.E6
+    WT_PT[4].P.S = TC_P4_S
+    WT_PT[4].P.T = TC_P4_T
+    WT_PT[4].PVALID = TRUE
+  ENDIF
+
+  IF WT_NPT >= 5 THEN
+    WT_PT[5].P.X = BitsToReal(TC_P5_X)
+    WT_PT[5].P.Y = BitsToReal(TC_P5_Y)
+    WT_PT[5].P.Z = BitsToReal(TC_P5_Z)
+    WT_PT[5].P.A = BitsToReal(TC_P5_A)
+    WT_PT[5].P.B = BitsToReal(TC_P5_B)
+    WT_PT[5].P.C = BitsToReal(TC_P5_C)
+    WT_PT[5].P.E1 = BitsToReal(TC_P5_E1)
+    WT_PT[5].P.E2 = BitsToReal(TC_P5_E2)
+    WT_PT[5].P.E3 = BitsToReal(TC_P5_E3)
+    WT_PT[5].P.E4 = $AXIS_ACT.E4
+    WT_PT[5].P.E5 = $AXIS_ACT.E5
+    WT_PT[5].P.E6 = $AXIS_ACT.E6
+    WT_PT[5].P.S = TC_P5_S
+    WT_PT[5].P.T = TC_P5_T
+    WT_PT[5].PVALID = TRUE
+  ENDIF
+
+  ; corners sit at the inner points, so at point 2 up to point WT_NPT-1
+  IF WT_NPT >= 3 THEN
+    WT_PT[2].CPRE = BitsToReal(TC_C2_PRE)
+    WT_PT[2].CPOST = BitsToReal(TC_C2_POST)
+    WT_PT[2].CROT = BitsToReal(TC_C2_ROT)
+    WT_PT[2].CDWELL = TC_C2_DWELL / 100.0
+  ENDIF
+  IF WT_NPT >= 4 THEN
+    WT_PT[3].CPRE = BitsToReal(TC_C3_PRE)
+    WT_PT[3].CPOST = BitsToReal(TC_C3_POST)
+    WT_PT[3].CROT = BitsToReal(TC_C3_ROT)
+    WT_PT[3].CDWELL = TC_C3_DWELL / 100.0
+  ENDIF
+  IF WT_NPT >= 5 THEN
+    WT_PT[4].CPRE = BitsToReal(TC_C4_PRE)
+    WT_PT[4].CPOST = BitsToReal(TC_C4_POST)
+    WT_PT[4].CROT = BitsToReal(TC_C4_ROT)
+    WT_PT[4].CDWELL = TC_C4_DWELL / 100.0
+  ENDIF
+
+  TC_PAGE_MASK = TC_PAGE_MASK B_OR 2
   TC_TASK_STATE = 1
 END
 
-DEF TaskSegment(nIdx:IN)
-  DECL INT nIdx
-  DECL INT i
-  DECL INT n
-
-  IF (nIdx < 1) OR (nIdx > WT_MAXPT - 1) THEN
-    WT_ERR = 3
-    TC_ERR_CODE = 3
+DEF ReadPage3()
+  IF TC_TASK_ID <> WT_TASK_ID THEN
+    WT_ERR = 2
+    TC_ERR_CODE = 2
     TC_TASK_STATE = 5
     RETURN
   ENDIF
 
-  WT_SEG[nIdx].SPEED = BitsToReal(TC_W1)
-  WT_SEG[nIdx].AMP = BitsToReal(TC_W2)
-  WT_SEG[nIdx].FREQ = BitsToReal(TC_W3)
-  WT_SEG[nIdx].JOB = TC_W4
-  WT_SEG[nIdx].WIRE = TC_W5
-  WT_SEG[nIdx].VOLT = TC_W6
-  WT_SEG[nIdx].DYN = TC_W7
-  WT_SEG[nIdx].WEAVE = TC_WEAVE_ON
-  WT_SEG[nIdx].SVALID = TRUE
+  IF WT_NSEAM >= 1 THEN
+    WT_SEG[1].SPEED = BitsToReal(TC_SG1_SPEED)
+    WT_SEG[1].AMP = BitsToReal(TC_SG1_AMP)
+    WT_SEG[1].FREQ = BitsToReal(TC_SG1_FREQ)
+    WT_SEG[1].JOB = TC_SG1_JOB
+    WT_SEG[1].WIRE = TC_SG1_WIRE
+    WT_SEG[1].VOLT = TC_SG1_VOLT
+    WT_SEG[1].DYN = TC_SG1_DYN
+    WT_SEG[1].WEAVE = TC_WEAVE_ON
+    WT_SEG[1].SVALID = TRUE
+  ENDIF
+  IF WT_NSEAM >= 2 THEN
+    WT_SEG[2].SPEED = BitsToReal(TC_SG2_SPEED)
+    WT_SEG[2].AMP = BitsToReal(TC_SG2_AMP)
+    WT_SEG[2].FREQ = BitsToReal(TC_SG2_FREQ)
+    WT_SEG[2].JOB = TC_SG2_JOB
+    WT_SEG[2].WIRE = TC_SG2_WIRE
+    WT_SEG[2].VOLT = TC_SG2_VOLT
+    WT_SEG[2].DYN = TC_SG2_DYN
+    WT_SEG[2].WEAVE = TC_WEAVE_ON
+    WT_SEG[2].SVALID = TRUE
+  ENDIF
+  IF WT_NSEAM >= 3 THEN
+    WT_SEG[3].SPEED = BitsToReal(TC_SG3_SPEED)
+    WT_SEG[3].AMP = BitsToReal(TC_SG3_AMP)
+    WT_SEG[3].FREQ = BitsToReal(TC_SG3_FREQ)
+    WT_SEG[3].JOB = TC_SG3_JOB
+    WT_SEG[3].WIRE = TC_SG3_WIRE
+    WT_SEG[3].VOLT = TC_SG3_VOLT
+    WT_SEG[3].DYN = TC_SG3_DYN
+    WT_SEG[3].WEAVE = TC_WEAVE_ON
+    WT_SEG[3].SVALID = TRUE
+  ENDIF
+  IF WT_NSEAM >= 4 THEN
+    WT_SEG[4].SPEED = BitsToReal(TC_SG4_SPEED)
+    WT_SEG[4].AMP = BitsToReal(TC_SG4_AMP)
+    WT_SEG[4].FREQ = BitsToReal(TC_SG4_FREQ)
+    WT_SEG[4].JOB = TC_SG4_JOB
+    WT_SEG[4].WIRE = TC_SG4_WIRE
+    WT_SEG[4].VOLT = TC_SG4_VOLT
+    WT_SEG[4].DYN = TC_SG4_DYN
+    WT_SEG[4].WEAVE = TC_WEAVE_ON
+    WT_SEG[4].SVALID = TRUE
+  ENDIF
 
-  n = 0
-  FOR i = 1 TO WT_MAXPT - 1
-    IF WT_SEG[i].SVALID THEN
-      n = n + 1
-    ENDIF
-  ENDFOR
-  TC_SEG_RCVD = n
+  WT_CRATER = BitsToReal(TC_CRATER)
+  WT_APPROACH = BitsToReal(TC_APPROACH)
+  WT_AIRSPEED = BitsToReal(TC_AIRSPEED)
+  WT_AXSPEED = BitsToReal(TC_AXSPEED)
+  WT_AXACC = BitsToReal(TC_AXACC)
+  WT_EXSPEED = BitsToReal(TC_EXSPEED)
+  WT_EXACC = BitsToReal(TC_EXACC)
+
+  TC_PAGE_MASK = TC_PAGE_MASK B_OR 4
   TC_TASK_STATE = 1
 END
 
@@ -254,43 +372,70 @@ END
 
 DEF TaskExec()
   DECL INT i
-  DECL INT nSeg
-  DECL REAL rLen
-  DECL REAL rF
-  DECL E6POS pCur
+  DECL INT nMask
   DECL E6POS pTgt
   DECL FRAME fOff
 
   WT_ERR = 0
-  IF (WT_NPT < 2) OR (WT_NPT > WT_MAXPT) THEN
+  IF NOT(RS_ENABLE) THEN
+    WT_ERR = 8
+  ENDIF
+  IF (WT_ERR == 0) AND ((WT_NSEAM < 0) OR (WT_NSEAM > WT_MAXPT - 1)) THEN
     WT_ERR = 1
   ENDIF
+
+  ; page 1 and page 3 are always needed, page 2 only once there is a corner
+  IF WT_ERR == 0 THEN
+    nMask = 5
+    IF WT_NSEAM >= 2 THEN
+      nMask = 7
+    ENDIF
+    IF WT_NSEAM == 0 THEN
+      nMask = 1
+    ENDIF
+    IF (TC_PAGE_MASK B_AND nMask) <> nMask THEN
+      WT_ERR = 2
+    ENDIF
+  ENDIF
+
   IF WT_ERR == 0 THEN
     FOR i = 1 TO WT_NPT
       IF NOT(WT_PT[i].PVALID) THEN
         WT_ERR = 2
       ENDIF
     ENDFOR
-  ENDIF
-  IF WT_ERR == 0 THEN
-    FOR i = 1 TO WT_NPT - 1
+    FOR i = 1 TO WT_NSEAM
       IF NOT(WT_SEG[i].SVALID) THEN
-        WT_ERR = 5
+        WT_ERR = 2
       ENDIF
     ENDFOR
   ENDIF
+
   IF WT_ERR == 0 THEN
     IF (WT_TOOL < 1) OR (WT_TOOL > 16) OR (WT_BASE < 0) OR (WT_BASE > 32) THEN
-      WT_ERR = 4
+      WT_ERR = 3
     ENDIF
   ENDIF
+
+  ; a corner needs room on both of its seams, otherwise the approach and
+  ; departure points would run past the neighbouring point
+  IF WT_ERR == 0 THEN
+    FOR i = 2 TO WT_NPT - 1
+      IF WT_PT[i].CPRE >= PosDist(WT_PT[i-1].P,WT_PT[i].P) THEN
+        WT_ERR = 7
+      ENDIF
+      IF WT_PT[i].CPOST >= PosDist(WT_PT[i].P,WT_PT[i+1].P) THEN
+        WT_ERR = 7
+      ENDIF
+    ENDFOR
+  ENDIF
+
   IF WT_ERR <> 0 THEN
     TC_ERR_CODE = WT_ERR
     TC_TASK_STATE = 5
     RETURN
   ENDIF
 
-  nSeg = WT_NPT - 1
   TC_ERR_CODE = 0
   TC_TASK_STATE = 2
   TC_TASK_BUSY = TRUE
@@ -298,10 +443,19 @@ DEF TaskExec()
 
   BAS(#TOOL,WT_TOOL)
   BAS(#BASE,WT_BASE)
-  BAS(#VEL_PTP,30)
+  SetPtpDyn()
   $APO.CDIS = 0.0
 
-  ; approach above the first point, along the negative local Z of the torch
+  ; TC_SEAM_COUNT 0 is a positioning command, no arc
+  IF WT_NSEAM == 0 THEN
+    MoveToPoint(1)
+    TC_TASK_BUSY = FALSE
+    TC_TASK_STATE = 4
+    TC_PROGRESS = 10000
+    RETURN
+  ENDIF
+
+  ; approach above point 1, along the negative local Z of the torch
   fOff = {X 0.0,Y 0.0,Z 0.0,A 0.0,B 0.0,C 0.0}
   fOff.Z = -WT_APPROACH
   pTgt = WT_PT[1].P : fOff
@@ -310,7 +464,6 @@ DEF TaskExec()
   SetAirSpeed()
   pTgt = WT_PT[1].P
   LIN pTgt
-  pCur = pTgt
 
   TC_TASK_STATE = 3
   ArcOn(1)
@@ -323,14 +476,42 @@ DEF TaskExec()
     RETURN
   ENDIF
 
-  FOR i = 1 TO nSeg
+  WeldChain()
+
+  ArcOff()
+  TC_PROGRESS = 10000
+
+  ; retract along the negative local Z of the torch
+  SetAirSpeed()
+  fOff.Z = -WT_APPROACH
+  pTgt = WT_PT[WT_NPT].P : fOff
+  LIN pTgt
+
+  TC_SEG_ACTIVE = 0
+  TC_TASK_BUSY = FALSE
+  TC_TASK_STATE = 4
+END
+
+DEF WeldChain()
+  ; the arc stays on from point 1 to the last point. Each seam is welded up
+  ; to the corner approach point, the corner itself is traversed with a
+  ; limited reorientation speed, and the next seam starts at the corner
+  ; departure point.
+  DECL INT i
+  DECL REAL rLen
+  DECL REAL rF
+  DECL E6POS pCur
+  DECL E6POS pTgt
+
+  pCur = WT_PT[1].P
+
+  FOR i = 1 TO WT_NSEAM
     TC_SEG_ACTIVE = i
-    TC_PROGRESS = ((i - 1) * 10000) / nSeg
+    TC_PROGRESS = ((i - 1) * 10000) / WT_NSEAM
     SetSegProc(i)
 
-    ; straight part of this seam, cut short by the corner approach distance
     pTgt = WT_PT[i+1].P
-    IF i < nSeg THEN
+    IF i < WT_NSEAM THEN
       rLen = PosDist(WT_PT[i].P,WT_PT[i+1].P)
       IF (WT_PT[i+1].CPRE > 0.1) AND (rLen > WT_PT[i+1].CPRE) THEN
         rF = 1.0 - (WT_PT[i+1].CPRE / rLen)
@@ -340,8 +521,7 @@ DEF TaskExec()
     WeldLine(i,pCur,pTgt)
     pCur = pTgt
 
-    IF i < nSeg THEN
-      ; the corner keeps the speed of this seam and limits the turn rate
+    IF i < WT_NSEAM THEN
       SetCornerProc(i+1)
       pTgt = WT_PT[i+1].P
       LIN pTgt
@@ -366,22 +546,49 @@ DEF TaskExec()
       rF = 1.0 - (WT_CRATER / rLen)
       LerpPos(WT_PT[WT_NPT-1].P,WT_PT[WT_NPT].P,rF,pTgt)
       LIN pTgt
-      pCur = pTgt
     ENDIF
   ENDIF
+END
 
-  ArcOff()
-  TC_PROGRESS = 10000
+DEF MoveToPoint(nP:IN)
+  ; RS_STEP_MODE decides how the point is reached. Mode 3 reads the X..C
+  ; fields as axis angles, which is how a joint target is sent now that
+  ; RobotSendRobot no longer has SJ1..SJ6.
+  DECL INT nP
+  DECL E6POS pTgt
+  DECL E6AXIS aTgt
 
-  ; retract along the negative local Z of the torch
-  SetAirSpeed()
-  fOff.Z = -WT_APPROACH
-  pTgt = WT_PT[WT_NPT].P : fOff
-  LIN pTgt
+  SWITCH WT_STEP
+  CASE 3
+    aTgt.A1 = WT_PT[nP].P.X
+    aTgt.A2 = WT_PT[nP].P.Y
+    aTgt.A3 = WT_PT[nP].P.Z
+    aTgt.A4 = WT_PT[nP].P.A
+    aTgt.A5 = WT_PT[nP].P.B
+    aTgt.A6 = WT_PT[nP].P.C
+    aTgt.E1 = WT_PT[nP].P.E1
+    aTgt.E2 = WT_PT[nP].P.E2
+    aTgt.E3 = WT_PT[nP].P.E3
+    aTgt.E4 = $AXIS_ACT.E4
+    aTgt.E5 = $AXIS_ACT.E5
+    aTgt.E6 = $AXIS_ACT.E6
+    PTP aTgt
+  CASE 2
+    SetAirSpeed()
+    pTgt = WT_PT[nP].P
+    LIN pTgt
+  DEFAULT
+    pTgt = WT_PT[nP].P
+    PTP pTgt
+  ENDSWITCH
+END
 
-  TC_SEG_ACTIVE = 0
-  TC_TASK_BUSY = FALSE
-  TC_TASK_STATE = 4
+DEF GoHome()
+  IF TC_TASK_BUSY THEN
+    RETURN
+  ENDIF
+  SetPtpDyn()
+  PTP XHOME
 END
 
 DEF TaskAbort()
@@ -391,8 +598,8 @@ DEF TaskAbort()
   WT_GAS_REQ = FALSE
   TC_ARC_ON = FALSE
   WT_ABORTED = TRUE
-  WT_ERR = 7
-  TC_ERR_CODE = 7
+  WT_ERR = 5
+  TC_ERR_CODE = 5
   TC_TASK_STATE = 5
   TC_SEG_ACTIVE = 0
   TC_TASK_BUSY = FALSE
@@ -426,7 +633,7 @@ DEF WeldLine(nS:IN,pA:IN,pB:IN)
     RETURN
   ENDIF
 
-  ; half a weave period in mm of travel
+  ; half a weave period expressed in mm of travel
   rHalf = WT_SEG[nS].SPEED / (2.0 * WT_SEG[nS].FREQ)
   IF rHalf < 0.5 THEN
     rHalf = 0.5
@@ -457,6 +664,33 @@ DEF WeldLine(nS:IN,pA:IN,pB:IN)
   $APO.CDIS = 0.0
   pTgt = pB
   LIN pTgt
+END
+
+DEF SetPtpDyn()
+  DECL INT nV
+  DECL INT nA
+
+  nV = WT_AXSPEED
+  nA = WT_AXACC
+  IF (nV < 1) OR (nV > 100) THEN
+    nV = 30
+  ENDIF
+  IF (nA < 1) OR (nA > 100) THEN
+    nA = 50
+  ENDIF
+  BAS(#VEL_PTP,nV)
+  BAS(#ACC_PTP,nA)
+
+  IF (WT_EXSPEED >= 1.0) AND (WT_EXSPEED <= 100.0) THEN
+    RedVelExAx[1] = WT_EXSPEED
+    RedVelExAx[2] = WT_EXSPEED
+    RedVelExAx[3] = WT_EXSPEED
+  ENDIF
+  IF (WT_EXACC >= 1.0) AND (WT_EXACC <= 100.0) THEN
+    RedAccExAx[1] = WT_EXACC
+    RedAccExAx[2] = WT_EXACC
+    RedAccExAx[3] = WT_EXACC
+  ENDIF
 END
 
 DEF SetAirSpeed()
@@ -535,7 +769,7 @@ DEF ArcOn(nS:IN)
   WAIT FOR (DI_ArcStability) OR ($TIMER[21] > 3000)
   $TIMER_STOP[21] = TRUE
   IF NOT(DI_ArcStability) THEN
-    WT_ERR = 6
+    WT_ERR = 4
   ENDIF
 END
 
