@@ -3,7 +3,11 @@
 &COMMENT Robot weld status
 DEF  SPS ( )
 
-  ; Cyclic publisher for RobotGetData and WeldGetData.
+  ; Cyclic publisher for RobotGetData, WeldGetData and the robot status that
+  ; RobotGetData does not carry. Also the only writer of the EWM_* welder
+  ; outputs, so that the manual commands from the PC and the requests from
+  ; pc2kuka.src cannot fight over them.
+  ;
   ; Signal numbers are the $OUT map starting at 3025.
   ; Low index is LSB. 32-bit signals are IEEE754 binary32.
   ;
@@ -12,8 +16,16 @@ DEF  SPS ( )
   ; RG_EXT_AXIS_VEL  max |E1..E3| speed, axis unit/s
   ; RG_EXT_AXIS_ACC  max |E1..E3| accel, axis unit/s^2
   ; RG_E1..RG_E3     $AXIS_ACT.E1..E3
+  ; RG_E4..RG_E6     $AXIS_ACT.E4..E6
   ; RG_SJ1..RG_SJ6   $AXIS_ACT.A1..A6, deg
   ; RG_X..RG_C       $POS_ACT in the current tool and base
+  ; RG_STATUS_S/T    $POS_ACT.S and .T, the arm configuration
+  ; RG_TCP_VEL       $VEL_ACT in mm/s, the actual path speed
+  ; RG_OV_PRO        $OV_PRO, which scales the programmed weld speed
+  ; RG_MODE_OP       1 T1, 2 T2, 3 AUT, 4 EX
+  ; RG_PRO_STATE     1 free, 2 reset, 3 active, 4 stop, 5 end
+  ; RG_ACT_TOOL/BASE the tool and base the task channel last applied
+  ; RG_HEARTBEAT     frame counter, lets the PC detect a frozen image
   ;
   ; WG_ARC_STABILITY       = DI_ArcStability
   ; WG_PS_READY            = DI_WeldingPSReady
@@ -28,10 +40,9 @@ DEF  SPS ( )
 
   DECL INT i
   DECL INT iDtMs
-  DECL INT iBits
   DECL INT iSample
+  DECL INT iBeat
   DECL REAL rDt
-  DECL REAL rTmp
   DECL REAL rAcc
   DECL REAL rAxisVel
   DECL REAL rAxisAcc
@@ -50,6 +61,7 @@ DEF  SPS ( )
   $TIMER_STOP[20] = FALSE
   $TIMER[20] = 0
   iSample = 0
+  iBeat = 0
   rAxisVel = 0.0
   rAxisAcc = 0.0
   rExtVel = 0.0
@@ -138,66 +150,78 @@ DEF  SPS ( )
       ENDIF
     ENDIF
 
-    rTmp = rAxisVel
-    CAST_TO(iBits, 0, rTmp)
-    RG_AXIS_VEL = iBits
-    rTmp = rAxisAcc
-    CAST_TO(iBits, 0, rTmp)
-    RG_AXIS_ACC = iBits
-    rTmp = rExtVel
-    CAST_TO(iBits, 0, rTmp)
-    RG_EXT_AXIS_VEL = iBits
-    rTmp = rExtAcc
-    CAST_TO(iBits, 0, rTmp)
-    RG_EXT_AXIS_ACC = iBits
+    RG_AXIS_VEL = RealToBits(rAxisVel)
+    RG_AXIS_ACC = RealToBits(rAxisAcc)
+    RG_EXT_AXIS_VEL = RealToBits(rExtVel)
+    RG_EXT_AXIS_ACC = RealToBits(rExtAcc)
 
-    rTmp = rE[1]
-    CAST_TO(iBits, 0, rTmp)
-    RG_E1 = iBits
-    rTmp = rE[2]
-    CAST_TO(iBits, 0, rTmp)
-    RG_E2 = iBits
-    rTmp = rE[3]
-    CAST_TO(iBits, 0, rTmp)
-    RG_E3 = iBits
+    RG_E1 = RealToBits(rE[1])
+    RG_E2 = RealToBits(rE[2])
+    RG_E3 = RealToBits(rE[3])
+    RG_E4 = RealToBits($AXIS_ACT.E4)
+    RG_E5 = RealToBits($AXIS_ACT.E5)
+    RG_E6 = RealToBits($AXIS_ACT.E6)
 
-    rTmp = rA[1]
-    CAST_TO(iBits, 0, rTmp)
-    RG_SJ1 = iBits
-    rTmp = rA[2]
-    CAST_TO(iBits, 0, rTmp)
-    RG_SJ2 = iBits
-    rTmp = rA[3]
-    CAST_TO(iBits, 0, rTmp)
-    RG_SJ3 = iBits
-    rTmp = rA[4]
-    CAST_TO(iBits, 0, rTmp)
-    RG_SJ4 = iBits
-    rTmp = rA[5]
-    CAST_TO(iBits, 0, rTmp)
-    RG_SJ5 = iBits
-    rTmp = rA[6]
-    CAST_TO(iBits, 0, rTmp)
-    RG_SJ6 = iBits
+    RG_SJ1 = RealToBits(rA[1])
+    RG_SJ2 = RealToBits(rA[2])
+    RG_SJ3 = RealToBits(rA[3])
+    RG_SJ4 = RealToBits(rA[4])
+    RG_SJ5 = RealToBits(rA[5])
+    RG_SJ6 = RealToBits(rA[6])
 
-    rTmp = $POS_ACT.X
-    CAST_TO(iBits, 0, rTmp)
-    RG_X = iBits
-    rTmp = $POS_ACT.Y
-    CAST_TO(iBits, 0, rTmp)
-    RG_Y = iBits
-    rTmp = $POS_ACT.Z
-    CAST_TO(iBits, 0, rTmp)
-    RG_Z = iBits
-    rTmp = $POS_ACT.A
-    CAST_TO(iBits, 0, rTmp)
-    RG_A = iBits
-    rTmp = $POS_ACT.B
-    CAST_TO(iBits, 0, rTmp)
-    RG_B = iBits
-    rTmp = $POS_ACT.C
-    CAST_TO(iBits, 0, rTmp)
-    RG_C = iBits
+    RG_X = RealToBits($POS_ACT.X)
+    RG_Y = RealToBits($POS_ACT.Y)
+    RG_Z = RealToBits($POS_ACT.Z)
+    RG_A = RealToBits($POS_ACT.A)
+    RG_B = RealToBits($POS_ACT.B)
+    RG_C = RealToBits($POS_ACT.C)
+
+    RG_STATUS_S = $POS_ACT.S
+    RG_STATUS_T = $POS_ACT.T
+    RG_TCP_VEL = RealToBits($VEL_ACT * 1000.0)
+    RG_OV_PRO = $OV_PRO
+    RG_ACT_TOOL = WT_TOOL
+    RG_ACT_BASE = WT_BASE
+    RG_APP_ERR = WT_ERR
+
+    SWITCH $MODE_OP
+    CASE #T1
+      RG_MODE_OP = 1
+    CASE #T2
+      RG_MODE_OP = 2
+    CASE #AUT
+      RG_MODE_OP = 3
+    CASE #EX
+      RG_MODE_OP = 4
+    DEFAULT
+      RG_MODE_OP = 0
+    ENDSWITCH
+
+    SWITCH $PRO_STATE1
+    CASE #P_FREE
+      RG_PRO_STATE = 1
+    CASE #P_RESET
+      RG_PRO_STATE = 2
+    CASE #P_ACTIVE
+      RG_PRO_STATE = 3
+    CASE #P_STOP
+      RG_PRO_STATE = 4
+    CASE #P_END
+      RG_PRO_STATE = 5
+    DEFAULT
+      RG_PRO_STATE = 0
+    ENDSWITCH
+
+    RG_DRIVES_ON = $PERI_RDY
+    RG_MOVE_ENABLE = $MOVE_ENABLE
+    RG_STOPMESS = $STOPMESS
+    RG_ROBOT_READY = $PERI_RDY AND $MOVE_ENABLE AND NOT($STOPMESS)
+
+    iBeat = iBeat + 1
+    IF iBeat > 65535 THEN
+      iBeat = 0
+    ENDIF
+    RG_HEARTBEAT = iBeat
 
     WG_ARC_STABILITY = DI_ArcStability
     WG_PS_READY = DI_WeldingPSReady
@@ -209,6 +233,42 @@ DEF  SPS ( )
     WG_REAL_VOLTAGE = GI_RealVoltage
     WG_REAL_CURRENT = GI_RealCurrent
     WG_REAL_WIRE_SPEED = GI_RealWireSpeed
+
+    ; welder outputs have a single writer. During a task the arc follows
+    ; pc2kuka.src, otherwise the manual commands from the PC pass through.
+    IF TC_TASK_BUSY THEN
+      EWM_EXTERNAL_CTRL_ENABLE = TRUE
+      EWM_WELD_MODE = TRUE
+      EWM_ROBOTOK = TRUE
+      EWM_GAS = WT_GAS_REQ
+      EWM_WELDING = WT_ARC_REQ
+      EWM_WELD_JOB = WT_ACT_JOB
+      EWM_WIRE_SPEED = WT_ACT_WIRE
+      EWM_WELD_PROGRAM = 0
+      EWM_MONITOR = TRUE
+      EWM_WELD_SIMULATION = FALSE
+      EWM_WIRE_FEEDING = FALSE
+      EWM_POS_FIND = FALSE
+      EWM_WIRE_RUN = FALSE
+      EWM_HANDLE_MODE1 = FALSE
+      EWM_HANDLE_MODE2 = FALSE
+    ELSE
+      EWM_EXTERNAL_CTRL_ENABLE = PLC_EWM_EXTERNAL_CTRL
+      EWM_WELD_MODE = PLC_EWM_WELD_MODE
+      EWM_ROBOTOK = PLC_EWM_ROBOTOK
+      EWM_GAS = PLC_EWM_GAS
+      EWM_WELDING = PLC_EWM_WELDING
+      EWM_WELD_JOB = PLC_EWM_WELD_JOB
+      EWM_WIRE_SPEED = PLC_EWM_WIRE_SPEED
+      EWM_WELD_PROGRAM = PLC_EWM_WELD_PROGRAM
+      EWM_MONITOR = PLC_EWM_MONITOR
+      EWM_WELD_SIMULATION = PLC_EWM_WELD_SIMULATION
+      EWM_WIRE_FEEDING = PLC_EWM_WIRE_FEEDING
+      EWM_POS_FIND = PLC_EWM_POS_FIND
+      EWM_WIRE_RUN = PLC_EWM_WIRE_RUN
+      EWM_HANDLE_MODE1 = PLC_EWM_HANDLE_MODE1
+      EWM_HANDLE_MODE2 = PLC_EWM_HANDLE_MODE2
+    ENDIF
     ;ENDFOLD (USER PLC)
 
   ENDLOOP

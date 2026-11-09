@@ -1,0 +1,28 @@
+&ACCESS RV
+&REL 1
+DEFFCT REAL BitsToReal(nRaw:IN)
+  ; IEEE754 binary32 bit pattern to REAL, done with integer math so that no
+  ; CAST_TO buffer is needed. Global so that sps.sub can call it too.
+  DECL INT nRaw
+  DECL INT nExp
+  DECL INT nMant
+  DECL REAL rMant
+  DECL REAL rVal
+
+  nExp = (nRaw B_AND 2139095040) / 8388608
+  nMant = nRaw B_AND 8388607
+  IF nExp > 254 THEN
+    RETURN 0.0
+  ENDIF
+  rMant = nMant
+  rMant = rMant / 8388608.0
+  IF nExp == 0 THEN
+    rVal = rMant * Pow2(-126)
+  ELSE
+    rVal = (1.0 + rMant) * Pow2(nExp - 127)
+  ENDIF
+  IF nRaw < 0 THEN
+    rVal = -rVal
+  ENDIF
+  RETURN rVal
+ENDFCT

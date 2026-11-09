@@ -6,27 +6,28 @@ DEF pc2kuka( )
 
   ; Continuous weld task channel over Profinet.
   ;
-  ; One telegram per Profinet frame. The PC writes the payload first, then
-  ; flips TC_TOGGLE in a later frame. The robot latches on every toggle edge
-  ; and echoes TC_TOGGLE on TC_ACK_TOGGLE together with the command and index,
-  ; so the PC knows the frame landed before it sends the next one.
+  ; One telegram per Profinet frame, a fixed header plus ten 32 bit data
+  ; words. The PC writes the payload first, then flips TC_TOGGLE in a later
+  ; frame, because the output image is written with several calls and is not
+  ; updated atomically. The robot latches on every toggle edge and echoes the
+  ; toggle, the command, the index and the frame number, so the PC knows the
+  ; frame landed before it sends the next one.
   ;
-  ; TC_CMD  1  begin task   - task id, point count, tool, base, crater length
-  ;         2  write point  - TC_INDEX 1..4, coordinates from RS_X..RS_C and
-  ;                           RS_E1..RS_E3, corner data from TC_CORNER_*
-  ;         3  write segment - TC_INDEX 1..3, process from TC_SEG_* / TC_WEAVE_*
-  ;         4  execute      - validate and weld the whole polyline
+  ; TC_CMD 1 begin task   2 point   3 corner   4 segment   5 execute   6 clear
+  ; The word layout per command is documented in config_weld_task.dat.
   ;
-  ; TC_TASK_STATE 0 idle, 1 receiving, 3 welding, 4 done, 5 error
+  ; TC_TASK_STATE 0 idle, 1 receiving, 2 ready, 3 welding, 4 done, 5 error
   ; TC_ERR_CODE   1 bad point count, 2 missing point, 3 bad index,
   ;               4 bad tool or base, 5 missing segment process,
-  ;               6 arc start timeout, 7 aborted, 9 unknown command
+  ;               6 arc start timeout, 7 aborted, 8 missing corner,
+  ;               9 unknown command
   ;
   ; n points give n-1 seams. Points 2..n-1 are corners and are stored once.
   ; The arc is started at point 1 and stays on through every corner.
   ;
+  ; This program never writes EWM_*. It requests the arc through WT_ARC_REQ
+  ; and WT_ACT_*, and sps.sub is the only writer of the welder outputs.
   ; This program uses $TIMER[21]. The status SPS uses $TIMER[20].
-  ; Outputs TC_* are written only here, RG_* and WG_* only by the SPS.
 
   DECL INT nCmd
   DECL INT nIdx
@@ -39,15 +40,21 @@ DEF pc2kuka( )
   WT_NPT = 0
   WT_ERR = 0
   WT_CRATER = 0.0
+  WT_APPROACH = 50.0
+  WT_AIRSPEED = 500.0
   WT_ABORTED = FALSE
+  WT_ARC_REQ = FALSE
+  WT_GAS_REQ = FALSE
   ClearTask()
 
   TC_ACK_CMD = 0
   TC_ACK_INDEX = 0
   TC_ACK_TASK_ID = 0
+  TC_ACK_FRAME_NO = 0
   TC_TASK_STATE = 0
   TC_ERR_CODE = 0
   TC_SEG_ACTIVE = 0
+  TC_PROGRESS = 0
   TC_TASK_BUSY = FALSE
   TC_ARC_ON = FALSE
   TC_ACK_TOGGLE = TC_TOGGLE
@@ -73,9 +80,15 @@ DEF pc2kuka( )
     CASE 2
       TaskPoint(nIdx)
     CASE 3
-      TaskSegment(nIdx)
+      TaskCorner(nIdx)
     CASE 4
+      TaskSegment(nIdx)
+    CASE 5
       TaskExec()
+    CASE 6
+      ClearTask()
+      TC_ERR_CODE = 0
+      TC_TASK_STATE = 0
     DEFAULT
       WT_ERR = 9
       TC_ERR_CODE = 9
@@ -85,6 +98,7 @@ DEF pc2kuka( )
     TC_ACK_CMD = nCmd
     TC_ACK_INDEX = nIdx
     TC_ACK_TASK_ID = WT_TASK_ID
+    TC_ACK_FRAME_NO = TC_FRAME_NO
     TC_ACK_TOGGLE = TC_TOGGLE
   ENDLOOP
 
@@ -96,14 +110,15 @@ END
 
 DEF ClearTask()
   DECL INT i
-  FOR i = 1 TO 4
+  FOR i = 1 TO WT_MAXPT
     WT_PT[i].PVALID = FALSE
     WT_PT[i].PTYP = 0
     WT_PT[i].CPRE = 0.0
     WT_PT[i].CPOST = 0.0
     WT_PT[i].CROT = 0.0
+    WT_PT[i].CDWELL = 0.0
   ENDFOR
-  FOR i = 1 TO 3
+  FOR i = 1 TO WT_MAXPT - 1
     WT_SEG[i].SVALID = FALSE
     WT_SEG[i].SPEED = 0.0
     WT_SEG[i].AMP = 0.0
@@ -111,22 +126,26 @@ DEF ClearTask()
     WT_SEG[i].JOB = 0
     WT_SEG[i].WIRE = 0
     WT_SEG[i].VOLT = 0
+    WT_SEG[i].DYN = 0
     WT_SEG[i].WEAVE = FALSE
   ENDFOR
   TC_POINT_RCVD = 0
   TC_SEG_RCVD = 0
+  TC_PROGRESS = 0
 END
 
 DEF TaskBegin()
   WT_TASK_ID = TC_TASK_ID
   WT_NPT = TC_POINT_COUNT
-  WT_TOOL = RS_TOOL_ID
-  WT_BASE = RS_BASE_ID
-  WT_CRATER = TC_CRATER_LEN / 10.0
+  WT_TOOL = TC_W1
+  WT_BASE = TC_W2
+  WT_CRATER = BitsToReal(TC_W3)
+  WT_APPROACH = BitsToReal(TC_W4)
+  WT_AIRSPEED = BitsToReal(TC_W5)
   WT_ERR = 0
   ClearTask()
   TC_SEG_ACTIVE = 0
-  IF (WT_NPT < 2) OR (WT_NPT > 4) THEN
+  IF (WT_NPT < 2) OR (WT_NPT > WT_MAXPT) THEN
     WT_ERR = 1
     TC_ERR_CODE = 1
     TC_TASK_STATE = 5
@@ -140,33 +159,38 @@ DEF TaskPoint(nIdx:IN)
   DECL INT nIdx
   DECL INT i
   DECL INT n
+  DECL INT nST
 
-  IF (nIdx < 1) OR (nIdx > 4) THEN
+  IF (nIdx < 1) OR (nIdx > WT_MAXPT) THEN
     WT_ERR = 3
     TC_ERR_CODE = 3
     TC_TASK_STATE = 5
     RETURN
   ENDIF
 
-  ; S and T are not in the telegram, so the current turn and status are kept
-  WT_PT[nIdx].P = $POS_ACT
-  WT_PT[nIdx].P.X = BitsToReal(RS_X)
-  WT_PT[nIdx].P.Y = BitsToReal(RS_Y)
-  WT_PT[nIdx].P.Z = BitsToReal(RS_Z)
-  WT_PT[nIdx].P.A = BitsToReal(RS_A)
-  WT_PT[nIdx].P.B = BitsToReal(RS_B)
-  WT_PT[nIdx].P.C = BitsToReal(RS_C)
-  WT_PT[nIdx].P.E1 = BitsToReal(RS_E1)
-  WT_PT[nIdx].P.E2 = BitsToReal(RS_E2)
-  WT_PT[nIdx].P.E3 = BitsToReal(RS_E3)
+  WT_PT[nIdx].P.X = BitsToReal(TC_W1)
+  WT_PT[nIdx].P.Y = BitsToReal(TC_W2)
+  WT_PT[nIdx].P.Z = BitsToReal(TC_W3)
+  WT_PT[nIdx].P.A = BitsToReal(TC_W4)
+  WT_PT[nIdx].P.B = BitsToReal(TC_W5)
+  WT_PT[nIdx].P.C = BitsToReal(TC_W6)
+  WT_PT[nIdx].P.E1 = BitsToReal(TC_W7)
+  WT_PT[nIdx].P.E2 = BitsToReal(TC_W8)
+  WT_PT[nIdx].P.E3 = BitsToReal(TC_W9)
+  WT_PT[nIdx].P.E4 = $AXIS_ACT.E4
+  WT_PT[nIdx].P.E5 = $AXIS_ACT.E5
+  WT_PT[nIdx].P.E6 = $AXIS_ACT.E6
+
+  ; status and turn decide the arm configuration, so the PC has to send them
+  nST = TC_W10
+  WT_PT[nIdx].P.S = nST B_AND 255
+  WT_PT[nIdx].P.T = (nST B_AND 65280) / 256
+
   WT_PT[nIdx].PTYP = TC_POINT_TYPE
-  WT_PT[nIdx].CPRE = BitsToReal(TC_CORNER_PRE)
-  WT_PT[nIdx].CPOST = BitsToReal(TC_CORNER_POST)
-  WT_PT[nIdx].CROT = BitsToReal(TC_CORNER_ROT)
   WT_PT[nIdx].PVALID = TRUE
 
   n = 0
-  FOR i = 1 TO 4
+  FOR i = 1 TO WT_MAXPT
     IF WT_PT[i].PVALID THEN
       n = n + 1
     ENDIF
@@ -175,29 +199,47 @@ DEF TaskPoint(nIdx:IN)
   TC_TASK_STATE = 1
 END
 
-DEF TaskSegment(nIdx:IN)
+DEF TaskCorner(nIdx:IN)
   DECL INT nIdx
-  DECL INT i
-  DECL INT n
 
-  IF (nIdx < 1) OR (nIdx > 3) THEN
+  IF (nIdx < 2) OR (nIdx > WT_MAXPT - 1) THEN
     WT_ERR = 3
     TC_ERR_CODE = 3
     TC_TASK_STATE = 5
     RETURN
   ENDIF
 
-  WT_SEG[nIdx].SPEED = BitsToReal(TC_SEG_SPEED)
-  WT_SEG[nIdx].AMP = BitsToReal(TC_WEAVE_AMP)
-  WT_SEG[nIdx].FREQ = BitsToReal(TC_WEAVE_FREQ)
-  WT_SEG[nIdx].JOB = TC_SEG_JOB
-  WT_SEG[nIdx].WIRE = TC_SEG_WIRE_CORR
-  WT_SEG[nIdx].VOLT = TC_SEG_VOLT_CORR
+  WT_PT[nIdx].CPRE = BitsToReal(TC_W1)
+  WT_PT[nIdx].CPOST = BitsToReal(TC_W2)
+  WT_PT[nIdx].CROT = BitsToReal(TC_W3)
+  WT_PT[nIdx].CDWELL = BitsToReal(TC_W4)
+  TC_TASK_STATE = 1
+END
+
+DEF TaskSegment(nIdx:IN)
+  DECL INT nIdx
+  DECL INT i
+  DECL INT n
+
+  IF (nIdx < 1) OR (nIdx > WT_MAXPT - 1) THEN
+    WT_ERR = 3
+    TC_ERR_CODE = 3
+    TC_TASK_STATE = 5
+    RETURN
+  ENDIF
+
+  WT_SEG[nIdx].SPEED = BitsToReal(TC_W1)
+  WT_SEG[nIdx].AMP = BitsToReal(TC_W2)
+  WT_SEG[nIdx].FREQ = BitsToReal(TC_W3)
+  WT_SEG[nIdx].JOB = TC_W4
+  WT_SEG[nIdx].WIRE = TC_W5
+  WT_SEG[nIdx].VOLT = TC_W6
+  WT_SEG[nIdx].DYN = TC_W7
   WT_SEG[nIdx].WEAVE = TC_WEAVE_ON
   WT_SEG[nIdx].SVALID = TRUE
 
   n = 0
-  FOR i = 1 TO 3
+  FOR i = 1 TO WT_MAXPT - 1
     IF WT_SEG[i].SVALID THEN
       n = n + 1
     ENDIF
@@ -217,9 +259,10 @@ DEF TaskExec()
   DECL REAL rF
   DECL E6POS pCur
   DECL E6POS pTgt
+  DECL FRAME fOff
 
   WT_ERR = 0
-  IF (WT_NPT < 2) OR (WT_NPT > 4) THEN
+  IF (WT_NPT < 2) OR (WT_NPT > WT_MAXPT) THEN
     WT_ERR = 1
   ENDIF
   IF WT_ERR == 0 THEN
@@ -249,18 +292,27 @@ DEF TaskExec()
 
   nSeg = WT_NPT - 1
   TC_ERR_CODE = 0
-  TC_TASK_STATE = 3
+  TC_TASK_STATE = 2
   TC_TASK_BUSY = TRUE
+  TC_PROGRESS = 0
 
   BAS(#TOOL,WT_TOOL)
   BAS(#BASE,WT_BASE)
   BAS(#VEL_PTP,30)
   $APO.CDIS = 0.0
 
-  pCur = WT_PT[1].P
-  pTgt = pCur
+  ; approach above the first point, along the negative local Z of the torch
+  fOff = {X 0.0,Y 0.0,Z 0.0,A 0.0,B 0.0,C 0.0}
+  fOff.Z = -WT_APPROACH
+  pTgt = WT_PT[1].P : fOff
   PTP pTgt
 
+  SetAirSpeed()
+  pTgt = WT_PT[1].P
+  LIN pTgt
+  pCur = pTgt
+
+  TC_TASK_STATE = 3
   ArcOn(1)
   IF WT_ERR <> 0 THEN
     ArcOff()
@@ -273,6 +325,7 @@ DEF TaskExec()
 
   FOR i = 1 TO nSeg
     TC_SEG_ACTIVE = i
+    TC_PROGRESS = ((i - 1) * 10000) / nSeg
     SetSegProc(i)
 
     ; straight part of this seam, cut short by the corner approach distance
@@ -288,11 +341,14 @@ DEF TaskExec()
     pCur = pTgt
 
     IF i < nSeg THEN
-      ; corner keeps the speed of this seam and limits the reorientation rate
+      ; the corner keeps the speed of this seam and limits the turn rate
       SetCornerProc(i+1)
       pTgt = WT_PT[i+1].P
       LIN pTgt
       pCur = pTgt
+      IF WT_PT[i+1].CDWELL > 0.01 THEN
+        WAIT SEC WT_PT[i+1].CDWELL
+      ENDIF
       rLen = PosDist(WT_PT[i+1].P,WT_PT[i+2].P)
       IF (WT_PT[i+1].CPOST > 0.1) AND (rLen > WT_PT[i+1].CPOST) THEN
         rF = WT_PT[i+1].CPOST / rLen
@@ -315,6 +371,14 @@ DEF TaskExec()
   ENDIF
 
   ArcOff()
+  TC_PROGRESS = 10000
+
+  ; retract along the negative local Z of the torch
+  SetAirSpeed()
+  fOff.Z = -WT_APPROACH
+  pTgt = WT_PT[WT_NPT].P : fOff
+  LIN pTgt
+
   TC_SEG_ACTIVE = 0
   TC_TASK_BUSY = FALSE
   TC_TASK_STATE = 4
@@ -323,9 +387,8 @@ END
 DEF TaskAbort()
   INTERRUPT OFF 25
   BRAKE
-  EWM_WELDING = FALSE
-  EWM_GAS = FALSE
-  EWM_ROBOTOK = FALSE
+  WT_ARC_REQ = FALSE
+  WT_GAS_REQ = FALSE
   TC_ARC_ON = FALSE
   WT_ABORTED = TRUE
   WT_ERR = 7
@@ -396,6 +459,24 @@ DEF WeldLine(nS:IN,pA:IN,pB:IN)
   LIN pTgt
 END
 
+DEF SetAirSpeed()
+  DECL REAL rV
+
+  rV = WT_AIRSPEED / 1000.0
+  IF rV < 0.001 THEN
+    rV = 0.001
+  ENDIF
+  IF rV > 2.0 THEN
+    rV = 2.0
+  ENDIF
+  $VEL.CP = rV
+  $ACC.CP = 2.3
+  $VEL.ORI1 = 200.0
+  $VEL.ORI2 = 200.0
+  $ACC.ORI1 = 100.0
+  $ACC.ORI2 = 100.0
+END
+
 DEF SetSegProc(nS:IN)
   DECL INT nS
   DECL REAL rV
@@ -414,9 +495,10 @@ DEF SetSegProc(nS:IN)
   $ACC.ORI1 = 100.0
   $ACC.ORI2 = 100.0
 
-  EWM_WELD_JOB = WT_SEG[nS].JOB
-  EWM_WIRE_SPEED = WT_SEG[nS].WIRE
-  ; TC_SEG_VOLT_CORR has no matching EWM output in $config.dat
+  WT_ACT_JOB = WT_SEG[nS].JOB
+  WT_ACT_WIRE = WT_SEG[nS].WIRE
+  WT_ACT_VOLT = WT_SEG[nS].VOLT
+  WT_ACT_DYN = WT_SEG[nS].DYN
 END
 
 DEF SetCornerProc(nP:IN)
@@ -438,14 +520,13 @@ END
 DEF ArcOn(nS:IN)
   DECL INT nS
 
-  EWM_EXTERNAL_CTRL_ENABLE = TRUE
-  EWM_WELD_MODE = TRUE
-  EWM_ROBOTOK = TRUE
-  EWM_WELD_JOB = WT_SEG[nS].JOB
-  EWM_WIRE_SPEED = WT_SEG[nS].WIRE
-  EWM_GAS = TRUE
+  WT_ACT_JOB = WT_SEG[nS].JOB
+  WT_ACT_WIRE = WT_SEG[nS].WIRE
+  WT_ACT_VOLT = WT_SEG[nS].VOLT
+  WT_ACT_DYN = WT_SEG[nS].DYN
+  WT_GAS_REQ = TRUE
   WAIT SEC 0.3
-  EWM_WELDING = TRUE
+  WT_ARC_REQ = TRUE
   TC_ARC_ON = TRUE
 
   $TIMER_STOP[21] = TRUE
@@ -459,15 +540,14 @@ DEF ArcOn(nS:IN)
 END
 
 DEF ArcOff()
-  EWM_WELDING = FALSE
+  WT_ARC_REQ = FALSE
   TC_ARC_ON = FALSE
   WAIT SEC 0.3
-  EWM_GAS = FALSE
-  EWM_ROBOTOK = FALSE
+  WT_GAS_REQ = FALSE
 END
 
 ;==================================
-; Helpers
+; Geometry helpers
 ;==================================
 
 DEF LerpPos(pA:IN,pB:IN,rF:IN,pR:OUT)
@@ -499,92 +579,4 @@ DEFFCT REAL PosDist(pA:IN,pB:IN)
   dy = pB.Y - pA.Y
   dz = pB.Z - pA.Z
   RETURN SQRT(dx * dx + dy * dy + dz * dz)
-ENDFCT
-
-DEFFCT REAL Pow2(nE:IN)
-  DECL INT nE
-  DECL INT i
-  DECL REAL r
-
-  r = 1.0
-  IF nE > 0 THEN
-    FOR i = 1 TO nE
-      r = r * 2.0
-    ENDFOR
-  ENDIF
-  IF nE < 0 THEN
-    FOR i = 1 TO -nE
-      r = r / 2.0
-    ENDFOR
-  ENDIF
-  RETURN r
-ENDFCT
-
-DEFFCT REAL BitsToReal(nRaw:IN)
-  ; IEEE754 binary32 bit pattern to REAL, done with integer math so that no
-  ; CAST_TO buffer is needed
-  DECL INT nRaw
-  DECL INT nExp
-  DECL INT nMant
-  DECL REAL rMant
-  DECL REAL rVal
-
-  nExp = (nRaw B_AND 2139095040) / 8388608
-  nMant = nRaw B_AND 8388607
-  IF nExp > 254 THEN
-    RETURN 0.0
-  ENDIF
-  rMant = nMant
-  rMant = rMant / 8388608.0
-  IF nExp == 0 THEN
-    rVal = rMant * Pow2(-126)
-  ELSE
-    rVal = (1.0 + rMant) * Pow2(nExp - 127)
-  ENDIF
-  IF nRaw < 0 THEN
-    rVal = -rVal
-  ENDIF
-  RETURN rVal
-ENDFCT
-
-DEFFCT INT RealToBits(rVal:IN)
-  ; REAL to IEEE754 binary32 bit pattern, the inverse of BitsToReal
-  DECL REAL rVal
-  DECL REAL rAbs
-  DECL INT nSign
-  DECL INT nExp
-  DECL INT nMant
-  DECL INT nRaw
-
-  nSign = 0
-  rAbs = rVal
-  IF rAbs < 0.0 THEN
-    nSign = 1
-    rAbs = -rAbs
-  ENDIF
-  IF rAbs < Pow2(-126) THEN
-    RETURN 0
-  ENDIF
-  nExp = 127
-  WHILE rAbs >= 2.0
-    rAbs = rAbs / 2.0
-    nExp = nExp + 1
-  ENDWHILE
-  WHILE rAbs < 1.0
-    rAbs = rAbs * 2.0
-    nExp = nExp - 1
-  ENDWHILE
-  IF nExp > 254 THEN
-    nExp = 254
-    rAbs = 1.9999999
-  ENDIF
-  nMant = (rAbs - 1.0) * 8388608.0
-  IF nMant > 8388607 THEN
-    nMant = 8388607
-  ENDIF
-  nRaw = nExp * 8388608 + nMant
-  IF nSign == 1 THEN
-    nRaw = nRaw B_OR (B_NOT 2147483647)
-  ENDIF
-  RETURN nRaw
 ENDFCT

@@ -1,0 +1,21 @@
+&ACCESS RV
+&REL 1
+DEFFCT REAL Pow2(nE:IN)
+  ; 2 raised to nE, for the IEEE754 helpers
+  DECL INT nE
+  DECL INT i
+  DECL REAL r
+
+  r = 1.0
+  IF nE > 0 THEN
+    FOR i = 1 TO nE
+      r = r * 2.0
+    ENDFOR
+  ENDIF
+  IF nE < 0 THEN
+    FOR i = 1 TO -nE
+      r = r / 2.0
+    ENDFOR
+  ENDIF
+  RETURN r
+ENDFCT

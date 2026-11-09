@@ -3,85 +3,175 @@
 ;==================================
 ; Weld task channel - snippet for $config.dat
 ;==================================
-; Paste the two blocks below into $config.dat, inside ;FOLD USER GLOBALS,
-; after the "; Userdefined robot weld comm" signals.
+; Paste the blocks below into $config.dat, inside ;FOLD USER GLOBALS.
 ; This file is not a standalone DEFDAT and must not be loaded as one.
 ;
-; The task channel replaces the earlier RS_POINT_COUNT / RS_POINT_INDEX /
-; RS_POINT_STROBE / RS_EXEC_STROBE handshake, which used the same
-; $IN[3745]... space. Remove those four signals before adding these.
+; STEP 1  Delete the WeldSendData block, $IN[3657]..$IN[3744]:
+;         WS_WELD_MODE, WS_ARC_START, WS_ROBOT_READY, WS_GAS_READY,
+;         WS_GUN_CLEAR, WS_TEST_INCHING, WS_POS_SEARCH, WS_WIRE_BACK,
+;         WS_MACHINE_SWITCH, WS_ERRACK, WS_EXT_CTRL_ENABLE, WS_SIMULATION,
+;         WS_SPOT_MODE, WS_SEND_WIRE_MODE, WS_SUPPER_MODE, WS_LIFT_ARC,
+;         WS_OPERATOR_MODE, WS_PRO_NUMBER, WS_JOB_NUMBER,
+;         WS_WIRE_SPEED_CORR, WS_ARC_VOLT_CORR, WS_DYNAMIN_CORR
+;         Those commands are carried by the PLC_EWM_* block at $IN[2001]
+;         plus the extension in STEP 2.
 ;
-; Budget inside the 3025..4048 limit:
-;   IN   3025..3656  RobotSendRobot  79 bytes
-;        3657..3744  WeldSendData    11 bytes
-;        3745..4048  task channel    38 bytes  (fully used)
-;   OUT  3025..3632  RobotGetData    76 bytes
-;        3633..3696  WeldGetData      8 bytes
-;        3697..3771  task channel ack
+; STEP 2  Add the eight weld commands that the 2001 block has no signal for.
+; STEP 3  Add the robot status that RobotGetData does not carry.
+; STEP 4  Add the task channel, which owns every remaining input bit.
 ;
-; A whole weld point needs 9 floats = 288 bits, which leaves no room for the
-; header. Point coordinates therefore reuse RS_X..RS_C and RS_E1..RS_E3 of
-; RobotSendRobot, and the task channel only carries the header, the corner
-; distances and the per segment process.
+; Address budget inside the 3025..4048 limit:
+;   IN   3025..3656  RobotSendRobot   79 bytes
+;        3657..4048  task channel     49 bytes  (fully used)
+;   OUT  3025..3632  RobotGetData     76 bytes
+;        3633..3696  WeldGetData       8 bytes
+;        3697..3920  robot status     28 bytes
+;        3921..4032  task channel ack 14 bytes
+;        4033..4048  spare             2 bytes
 
 ;==================================
-; Weld task channel signals
+; STEP 2  Weld command extension, inside the free part of the 2001 block
 ;==================================
+; byte offset 284. PLC_MSG_OK ends at $IN[2265], so this starts on the next
+; byte boundary and leaves $IN[2321]..$IN[3024] free.
 
 ;DEFINE IN IO
-; header
-SIGNAL TC_CMD $IN[3745]  TO $IN[3752]
-SIGNAL TC_POINT_COUNT $IN[3753]  TO $IN[3760]
-SIGNAL TC_INDEX $IN[3761]  TO $IN[3768]
-SIGNAL TC_POINT_TYPE $IN[3769]  TO $IN[3776]
-SIGNAL TC_TASK_ID $IN[3777]  TO $IN[3792]
-SIGNAL TC_TOGGLE $IN[3793]
-SIGNAL TC_WEAVE_ON $IN[3794]
-SIGNAL TC_ARC_TRACK_ON $IN[3795]
-SIGNAL TC_ABORT $IN[3796]
-; $IN[3797]..$IN[3800] reserved
-; corner payload, valid when TC_CMD = 2, REAL in mm and rpm
-SIGNAL TC_CORNER_PRE $IN[3801]  TO $IN[3832]
-SIGNAL TC_CORNER_POST $IN[3833]  TO $IN[3864]
-SIGNAL TC_CORNER_ROT $IN[3865]  TO $IN[3896]
-; segment payload, valid when TC_CMD = 3, REAL in mm/s, mm and Hz
-SIGNAL TC_SEG_SPEED $IN[3897]  TO $IN[3928]
-SIGNAL TC_WEAVE_AMP $IN[3929]  TO $IN[3960]
-SIGNAL TC_WEAVE_FREQ $IN[3961]  TO $IN[3992]
-SIGNAL TC_SEG_JOB $IN[3993]  TO $IN[4000]
-SIGNAL TC_SEG_WIRE_CORR $IN[4001]  TO $IN[4016]
-SIGNAL TC_SEG_VOLT_CORR $IN[4017]  TO $IN[4032]
-; crater fill length, 0.1 mm per count, valid when TC_CMD = 1
-SIGNAL TC_CRATER_LEN $IN[4033]  TO $IN[4048]
+SIGNAL PLC_EWM_GUN_CLEAR $IN[2273]
+SIGNAL PLC_EWM_ERRACK $IN[2274]
+SIGNAL PLC_EWM_SPOT_MODE $IN[2275]
+SIGNAL PLC_EWM_SEND_WIRE_MODE $IN[2276]
+SIGNAL PLC_EWM_SUPPER_MODE $IN[2277]
+SIGNAL PLC_EWM_LIFT_ARC $IN[2278]
+; $IN[2279]..$IN[2280] reserved
+SIGNAL PLC_EWM_OPERATOR_MODE $IN[2281]  TO $IN[2288]
+SIGNAL PLC_EWM_ARC_VOLT_CORR $IN[2289]  TO $IN[2304]
+SIGNAL PLC_EWM_DYNAMIC_CORR $IN[2305]  TO $IN[2320]
+
+;==================================
+; STEP 3  Robot status that RobotGetData does not carry
+;==================================
+; Written by sps.sub only. 32 bit fields are IEEE754 binary32.
 
 ;DEFINE OUT IO
-SIGNAL TC_ACK_CMD $OUT[3697]  TO $OUT[3704]
-SIGNAL TC_ACK_INDEX $OUT[3705]  TO $OUT[3712]
-SIGNAL TC_TASK_STATE $OUT[3713]  TO $OUT[3720]
-SIGNAL TC_ERR_CODE $OUT[3721]  TO $OUT[3728]
-SIGNAL TC_ACK_TASK_ID $OUT[3729]  TO $OUT[3744]
-SIGNAL TC_SEG_ACTIVE $OUT[3745]  TO $OUT[3752]
-SIGNAL TC_POINT_RCVD $OUT[3753]  TO $OUT[3760]
-SIGNAL TC_SEG_RCVD $OUT[3761]  TO $OUT[3768]
-SIGNAL TC_ACK_TOGGLE $OUT[3769]
-SIGNAL TC_TASK_BUSY $OUT[3770]
-SIGNAL TC_ARC_ON $OUT[3771]
+SIGNAL RG_STATUS_S $OUT[3697]  TO $OUT[3704]
+SIGNAL RG_STATUS_T $OUT[3705]  TO $OUT[3712]
+SIGNAL RG_ACT_TOOL $OUT[3713]  TO $OUT[3720]
+SIGNAL RG_ACT_BASE $OUT[3721]  TO $OUT[3728]
+SIGNAL RG_OV_PRO $OUT[3729]  TO $OUT[3736]
+SIGNAL RG_MODE_OP $OUT[3737]  TO $OUT[3744]
+SIGNAL RG_PRO_STATE $OUT[3745]  TO $OUT[3752]
+SIGNAL RG_DRIVES_ON $OUT[3753]
+SIGNAL RG_MOVE_ENABLE $OUT[3754]
+SIGNAL RG_STOPMESS $OUT[3755]
+SIGNAL RG_ROBOT_READY $OUT[3756]
+; $OUT[3757]..$OUT[3760] reserved
+SIGNAL RG_APP_ERR $OUT[3761]  TO $OUT[3776]
+SIGNAL RG_HEARTBEAT $OUT[3777]  TO $OUT[3792]
+SIGNAL RG_TCP_VEL $OUT[3793]  TO $OUT[3824]
+SIGNAL RG_E4 $OUT[3825]  TO $OUT[3856]
+SIGNAL RG_E5 $OUT[3857]  TO $OUT[3888]
+SIGNAL RG_E6 $OUT[3889]  TO $OUT[3920]
+
+;==================================
+; STEP 4  Task channel
+;==================================
+; One telegram per Profinet frame. Fixed header plus ten 32 bit data words
+; whose meaning depends on TC_CMD, the same idea as a PROFIdrive parameter
+; channel. A point frame carries a whole point, so the number of points in a
+; task is limited by WT_PT below and not by the size of the process image.
+;
+; TC_CMD 1 begin task
+;          W1 tool number (INT)        W2 base number (INT)
+;          W3 crater fill length mm    W4 approach height mm
+;          W5 air move speed mm/s
+; TC_CMD 2 point, TC_INDEX 1..16, TC_POINT_TYPE 1 start 2 corner 3 end
+;          W1..W6 X Y Z A B C         W7..W9 E1 E2 E3
+;          W10 status and turn (INT), S in bits 0..7, T in bits 8..15
+; TC_CMD 3 corner, TC_INDEX is the point number of the corner
+;          W1 approach distance mm     W2 departure distance mm
+;          W3 max reorientation rpm    W4 dwell at the corner in s
+; TC_CMD 4 segment, TC_INDEX 1..15
+;          W1 weld speed mm/s          W2 weave amplitude mm
+;          W3 weave frequency Hz       W4 job number (INT)
+;          W5 wire correction (INT)    W6 voltage correction (INT)
+;          W7 dynamic correction (INT)
+; TC_CMD 5 execute, no payload
+; TC_CMD 6 clear the buffer, no payload
+;
+; REAL words carry the IEEE754 bit pattern, INT words carry a plain int32.
+
+;DEFINE IN IO
+SIGNAL TC_CMD $IN[3657]  TO $IN[3664]
+SIGNAL TC_INDEX $IN[3665]  TO $IN[3672]
+SIGNAL TC_POINT_COUNT $IN[3673]  TO $IN[3680]
+SIGNAL TC_POINT_TYPE $IN[3681]  TO $IN[3688]
+SIGNAL TC_TASK_ID $IN[3689]  TO $IN[3704]
+SIGNAL TC_TOGGLE $IN[3705]
+SIGNAL TC_ABORT $IN[3706]
+SIGNAL TC_WEAVE_ON $IN[3707]
+SIGNAL TC_ARC_TRACK_ON $IN[3708]
+SIGNAL TC_LAST_FRAME $IN[3709]
+; $IN[3710]..$IN[3712] reserved
+SIGNAL TC_W1 $IN[3713]  TO $IN[3744]
+SIGNAL TC_W2 $IN[3745]  TO $IN[3776]
+SIGNAL TC_W3 $IN[3777]  TO $IN[3808]
+SIGNAL TC_W4 $IN[3809]  TO $IN[3840]
+SIGNAL TC_W5 $IN[3841]  TO $IN[3872]
+SIGNAL TC_W6 $IN[3873]  TO $IN[3904]
+SIGNAL TC_W7 $IN[3905]  TO $IN[3936]
+SIGNAL TC_W8 $IN[3937]  TO $IN[3968]
+SIGNAL TC_W9 $IN[3969]  TO $IN[4000]
+SIGNAL TC_W10 $IN[4001]  TO $IN[4032]
+SIGNAL TC_FRAME_NO $IN[4033]  TO $IN[4048]
+
+;DEFINE OUT IO
+SIGNAL TC_ACK_CMD $OUT[3921]  TO $OUT[3928]
+SIGNAL TC_ACK_INDEX $OUT[3929]  TO $OUT[3936]
+SIGNAL TC_TASK_STATE $OUT[3937]  TO $OUT[3944]
+SIGNAL TC_ERR_CODE $OUT[3945]  TO $OUT[3952]
+SIGNAL TC_ACK_TASK_ID $OUT[3953]  TO $OUT[3968]
+SIGNAL TC_SEG_ACTIVE $OUT[3969]  TO $OUT[3976]
+SIGNAL TC_POINT_RCVD $OUT[3977]  TO $OUT[3984]
+SIGNAL TC_SEG_RCVD $OUT[3985]  TO $OUT[3992]
+SIGNAL TC_ACK_TOGGLE $OUT[3993]
+SIGNAL TC_TASK_BUSY $OUT[3994]
+SIGNAL TC_ARC_ON $OUT[3995]
+; $OUT[3996]..$OUT[4000] reserved
+SIGNAL TC_ACK_FRAME_NO $OUT[4001]  TO $OUT[4016]
+SIGNAL TC_PROGRESS $OUT[4017]  TO $OUT[4032]
+; $OUT[4033]..$OUT[4048] spare
 
 ;==================================
 ; Weld task buffer
 ;==================================
-; pc2kuka.src keeps the latched task here. The buffer must be global because
-; the local subprograms of pc2kuka.src cannot see its local variables.
+; pc2kuka.src keeps the latched task here, and sps.sub reads the welder
+; request fields. The buffer must be global because the local subprograms of
+; pc2kuka.src cannot see its local variables, and because sps.sub is a
+; separate interpreter.
+;
+; Raise WT_MAXPT and the two array sizes together to allow longer seams.
 
-STRUC WELD_PT_T E6POS P,REAL CPRE,CPOST,CROT,INT PTYP,BOOL PVALID
-STRUC WELD_SEG_T REAL SPEED,AMP,FREQ,INT JOB,WIRE,VOLT,BOOL WEAVE,SVALID
+STRUC WELD_PT_T E6POS P,REAL CPRE,CPOST,CROT,CDWELL,INT PTYP,BOOL PVALID
+STRUC WELD_SEG_T REAL SPEED,AMP,FREQ,INT JOB,WIRE,VOLT,DYN,BOOL WEAVE,SVALID
 
-DECL WELD_PT_T WT_PT[4]
-DECL WELD_SEG_T WT_SEG[3]
+DECL WELD_PT_T WT_PT[16]
+DECL WELD_SEG_T WT_SEG[15]
+DECL INT WT_MAXPT=16
 DECL INT WT_TASK_ID=0
 DECL INT WT_NPT=0
 DECL INT WT_TOOL=1
 DECL INT WT_BASE=0
 DECL INT WT_ERR=0
 DECL REAL WT_CRATER=0.0
+DECL REAL WT_APPROACH=50.0
+DECL REAL WT_AIRSPEED=500.000
 DECL BOOL WT_ABORTED=FALSE
+
+; welder request, written by pc2kuka.src and applied by sps.sub so that the
+; EWM_* outputs have exactly one writer
+DECL BOOL WT_ARC_REQ=FALSE
+DECL BOOL WT_GAS_REQ=FALSE
+DECL INT WT_ACT_JOB=0
+DECL INT WT_ACT_WIRE=0
+DECL INT WT_ACT_VOLT=0
+DECL INT WT_ACT_DYN=0
