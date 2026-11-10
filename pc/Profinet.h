@@ -14,11 +14,11 @@
 
 class QTimer;
 
-// KUKA $IN/$OUT[3025..4047] is one image in each direction. The transfer
-// is 128 bytes because $IN[4048] / $OUT[4048] is the unused high bit of
-// the last byte and is not assigned. Byte 0 is signal 3025. When byte 0
-// of the cifX process image is $IN[1] / $OUT[1], the byte offset is
-// (3025 - 1) / 8 = 378.
+// KUKA inputs are $IN[3025]..$IN[4232], 151 bytes. Each seam pose includes
+// E1..E3, which moved the welder block past 4047. Outputs stay
+// $OUT[3025]..$OUT[4047] in a 128 byte image. Byte 0 is signal 3025.
+// When byte 0 of the cifX process image is $IN[1] / $OUT[1], the byte
+// offset is (3025 - 1) / 8 = 378.
 //
 // Signals do not overlap. The PC writes one motion command per transfer
 // and flips KukaHeader::toggle in that same transfer. KUKA latches motion
@@ -36,22 +36,25 @@ class QTimer;
 // There is no Cartesian stream. Command 2 is the host's joint plan.
 // pointIndex is 1..pointTotal. cont blends every waypoint except the last
 // (pointIndex >= pointTotal). pointTotal 0 leaves the stream open.
-// The host fills e1..e3. A seam copies E1..E3 and S/T from the actual pose.
+// The host fills e1..e3 on joint commands and on both seam endpoints.
+// S, T and E4..E6 of a seam still come from the actual pose.
 //
 // Command 3 layout, bit 0 = $IN[3025]:
-//   start XYZABC at bit 384, end XYZABC at bit 576
-//   start tilt, end tilt, speed, amplitude, frequency at bit 768, 32 bits each
+//   start XYZABC E1 E2 E3 at bit 384, end at bit 672, 9 floats each
+//   start tilt, end tilt, speed, amplitude, frequency at bit 960
 //   weave is header byte 8 (bit 64): 0 off, 1 triangle, 2 sine
 // Send command 3, then command 4, with the same task id.
 //
-// Welder commands are WS_* at byte 116 of this image ($IN[3953], 11 bytes).
+// Welder commands are WS_* at byte 140 of this image ($IN[4145], 11 bytes).
 // They are not selected by RS_CMD. Every motion transfer keeps the last
 // WeldSendData slice, and slotSendWeldData updates that slice alone.
 
-constexpr uint32_t kKukaImageBytes = 128;
+constexpr uint32_t kKukaCommandBytes = 151;
+constexpr uint32_t kKukaStatusBytes = 128;
+constexpr uint32_t kKukaImageBytes = kKukaCommandBytes;
 constexpr uint32_t kKukaCommandOffset = 378;
 constexpr uint32_t kKukaStatusOffset = 378;
-constexpr uint32_t kKukaWeldSliceOffset = 116;
+constexpr uint32_t kKukaWeldSliceOffset = 140;
 constexpr uint32_t kKukaWeldSliceBytes = 11;
 
 enum KukaCmd : uint8_t {
@@ -212,11 +215,12 @@ struct JointCommand
     float axisAcc = 50.f;
 };
 
-// XYZABC in the selected base and tool. The controller latches E1..E3,
-// S and T from the actual pose when the seam is stored.
+// XYZABC plus E1..E3 in the selected base and tool. S, T and E4..E6 are
+// latched from the actual pose when the seam is stored.
 struct WeldPoint
 {
     float x = 0.f, y = 0.f, z = 0.f, a = 0.f, b = 0.f, c = 0.f;
+    float e1 = 0.f, e2 = 0.f, e3 = 0.f;
 };
 
 // One seam. Tilts are degrees about tool Y. 0 skips that orientation move.
@@ -234,7 +238,7 @@ struct WeldSeam
     uint8_t weave = KukaWeaveOff;
 };
 
-// Welder command packed at byte 116 of the 3025 image ($IN[3953]).
+// Welder command packed at byte 140 of the 3025 image ($IN[4145]).
 // The corrections are raw integers, not IEEE754. The program output on
 // the controller is 4 bits, so only the low 4 bits of weld_pro_number
 // reach EWM_WELD_PROGRAM.

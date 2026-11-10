@@ -4,7 +4,7 @@
 &PARAM TEMPLATE = C:\KRC\Roboter\Template\vorgabe
 DEF pc2kuka( )
 
-  ; One Profinet image, $IN[3025]..$IN[4047]. Signals do not overlap.
+  ; One Profinet image, $IN[3025]..$IN[4232]. Signals do not overlap.
   ; The robot latches motion on every RS_TOGGLE edge.
   ;
   ;   1 realtime joint target, RJ_A1..A6 RJ_E1..E3, move now
@@ -182,6 +182,7 @@ DEF ReadSeam()
     RETURN
   ENDIF
 
+  ; S, T and E4..E6 stay with the actual pose. E1..E3 come from the host.
   WT_PT[1].P = $POS_ACT
   WT_PT[1].P.X = BitsToReal(WN_SX)
   WT_PT[1].P.Y = BitsToReal(WN_SY)
@@ -189,6 +190,9 @@ DEF ReadSeam()
   WT_PT[1].P.A = BitsToReal(WN_SA)
   WT_PT[1].P.B = BitsToReal(WN_SB)
   WT_PT[1].P.C = BitsToReal(WN_SC)
+  WT_PT[1].P.E1 = BitsToReal(WN_SE1)
+  WT_PT[1].P.E2 = BitsToReal(WN_SE2)
+  WT_PT[1].P.E3 = BitsToReal(WN_SE3)
   WT_PT[1].PVALID = TRUE
 
   WT_PT[2].P = $POS_ACT
@@ -198,6 +202,9 @@ DEF ReadSeam()
   WT_PT[2].P.A = BitsToReal(WN_EA)
   WT_PT[2].P.B = BitsToReal(WN_EB)
   WT_PT[2].P.C = BitsToReal(WN_EC)
+  WT_PT[2].P.E1 = BitsToReal(WN_EE1)
+  WT_PT[2].P.E2 = BitsToReal(WN_EE2)
+  WT_PT[2].P.E3 = BitsToReal(WN_EE3)
   WT_PT[2].PVALID = TRUE
 
   WT_TILT_S = BitsToReal(WN_START_TILT)

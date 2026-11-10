@@ -978,7 +978,7 @@ SIGNAL LASER_Z $IN[2233]  TO $IN[2264]
 
 SIGNAL PLC_MSG_OK $IN[2265]
 ; Legacy PLC welder inputs. The host no longer writes this block. Welder
-; commands from the PC are WS_* at $IN[3953], and sps.sub copies those
+; commands from the PC are WS_* at $IN[4145], and sps.sub copies those
 ; onto EWM_*. These signals stay so an existing PLC map still loads.
 ; $IN[2321]..$IN[3024] stays free.
 SIGNAL PLC_EWM_GUN_CLEAR $IN[2273]
@@ -1037,11 +1037,11 @@ SIGNAL WELD_START $OUT[2278]
 ; bits, so src converts them with BitsToReal / RealToBits.
 ; No two signals share an input. KSS rejects a bit that is assigned twice.
 ;
-; The defined inputs are $IN[3025]..$IN[4040]. $IN[4041]..$IN[4047] is spare.
-; $IN[4048] is not part of this map. The Profinet image is still 128 bytes,
-; because bit 7 of the last byte is that unused signal. Byte 0 of this image
-; is $IN[3025]. If byte 0 of the Profinet image is $IN[1], the cifX offset
-; is (3025-1)/8 = 378.
+; The defined inputs are $IN[3025]..$IN[4232], 151 bytes. Each seam pose
+; carries E1..E3, so the block is 24 bytes longer than the old 128 byte
+; image and it no longer ends at 4047. Outputs stay on the 128 byte image
+; through $OUT[4047]. Byte 0 of this image is $IN[3025]. If byte 0 of the
+; Profinet image is $IN[1], the cifX offset is (3025-1)/8 = 378.
 ;
 ; There is no Cartesian stream. The host plans in joint space, or it sends
 ; one weld seam below. Actual Cartesian pose is still published on RG_X..RG_C.
@@ -1064,16 +1064,17 @@ SIGNAL WELD_START $OUT[2278]
 ; RS_AXIS_SPEED and RS_AXIS_ACC are percent, 1..100, and also scale E1..E3.
 ;
 ; Command 3 is one seam in the selected tool and base. WN_S* is the weld
-; start and WN_E* is the weld end, mm and deg. WN_START_TILT and WN_END_TILT
+; start and WN_E* is the weld end. X Y Z are mm, A B C are deg, and E1..E3
+; are the external axes at that endpoint. WN_START_TILT and WN_END_TILT
 ; are degrees about tool Y. The TCP stays on that endpoint and the torch
 ; body swings by that angle so the arm can enter and leave without a
-; collision. 0 skips the extra orientation move. E1..E3 and S/T of the seam
-; are copied from the actual pose, so the positioner stays put.
+; collision. 0 skips the extra orientation move. S, T and E4..E6 are copied
+; from the actual pose. E1..E3 move to the values in the seam.
 ; RS_WEAVE is 0 off, 1 triangle, 2 sine. WN_SPEED is mm/s, WN_AMP is mm,
 ; WN_FREQ is Hz. Approach and retreat between the tilted pose and the seam
 ; run at the stored air speed, 500 mm/s.
 ;
-; The PC writes the whole 128 bytes in one transfer and flips RS_TOGGLE
+; The PC writes the whole 151 bytes in one transfer and flips RS_TOGGLE
 ; in that same transfer. The robot latches motion on the edge. RS_CONT
 ; requests approximation. RS_ENABLE, RS_RESET and RS_GOTO_HOME are acted
 ; on outside the seam page. RS_PC_ALIVE is the PC watchdog. RS_ABORT stops
@@ -1111,52 +1112,58 @@ SIGNAL RJ_E1 $IN[3313]  TO $IN[3344]
 SIGNAL RJ_E2 $IN[3345]  TO $IN[3376]
 SIGNAL RJ_E3 $IN[3377]  TO $IN[3408]
 
-; RS_CMD 3. One seam. $IN[3409]..$IN[3952], 68 bytes.
+; RS_CMD 3. One seam. $IN[3409]..$IN[4144], 92 bytes.
+; Each endpoint is X Y Z A B C E1 E2 E3, then the two tilts and the weave.
 SIGNAL WN_SX $IN[3409]  TO $IN[3440]
 SIGNAL WN_SY $IN[3441]  TO $IN[3472]
 SIGNAL WN_SZ $IN[3473]  TO $IN[3504]
 SIGNAL WN_SA $IN[3505]  TO $IN[3536]
 SIGNAL WN_SB $IN[3537]  TO $IN[3568]
 SIGNAL WN_SC $IN[3569]  TO $IN[3600]
-SIGNAL WN_EX $IN[3601]  TO $IN[3632]
-SIGNAL WN_EY $IN[3633]  TO $IN[3664]
-SIGNAL WN_EZ $IN[3665]  TO $IN[3696]
-SIGNAL WN_EA $IN[3697]  TO $IN[3728]
-SIGNAL WN_EB $IN[3729]  TO $IN[3760]
-SIGNAL WN_EC $IN[3761]  TO $IN[3792]
-SIGNAL WN_START_TILT $IN[3793]  TO $IN[3824]
-SIGNAL WN_END_TILT $IN[3825]  TO $IN[3856]
-SIGNAL WN_SPEED $IN[3857]  TO $IN[3888]
-SIGNAL WN_AMP $IN[3889]  TO $IN[3920]
-SIGNAL WN_FREQ $IN[3921]  TO $IN[3952]
+SIGNAL WN_SE1 $IN[3601]  TO $IN[3632]
+SIGNAL WN_SE2 $IN[3633]  TO $IN[3664]
+SIGNAL WN_SE3 $IN[3665]  TO $IN[3696]
+SIGNAL WN_EX $IN[3697]  TO $IN[3728]
+SIGNAL WN_EY $IN[3729]  TO $IN[3760]
+SIGNAL WN_EZ $IN[3761]  TO $IN[3792]
+SIGNAL WN_EA $IN[3793]  TO $IN[3824]
+SIGNAL WN_EB $IN[3825]  TO $IN[3856]
+SIGNAL WN_EC $IN[3857]  TO $IN[3888]
+SIGNAL WN_EE1 $IN[3889]  TO $IN[3920]
+SIGNAL WN_EE2 $IN[3921]  TO $IN[3952]
+SIGNAL WN_EE3 $IN[3953]  TO $IN[3984]
+SIGNAL WN_START_TILT $IN[3985]  TO $IN[4016]
+SIGNAL WN_END_TILT $IN[4017]  TO $IN[4048]
+SIGNAL WN_SPEED $IN[4049]  TO $IN[4080]
+SIGNAL WN_AMP $IN[4081]  TO $IN[4112]
+SIGNAL WN_FREQ $IN[4113]  TO $IN[4144]
 
-; Welder command, live on every transfer. $IN[3953]..$IN[4040], 11 bytes.
+; Welder command, live on every transfer. $IN[4145]..$IN[4232], 11 bytes.
 ; sps.sub maps the bits that have an EWM_* output. Gun clear, error ack,
 ; spot, send-wire, supper, lift-arc, voltage and dynamics have no EWM_*
 ; output; a seam still latches job, wire, voltage, dynamics and program.
-SIGNAL WS_WELD_MODE $IN[3953]
-SIGNAL WS_ARC_START $IN[3954]
-SIGNAL WS_ROBOT_READY $IN[3955]
-SIGNAL WS_GAS_READY $IN[3956]
-SIGNAL WS_GUN_CLEAR $IN[3957]
-SIGNAL WS_TEST_INCHING $IN[3958]
-SIGNAL WS_POS_SEARCH $IN[3959]
-SIGNAL WS_WIRE_BACK $IN[3960]
-SIGNAL WS_MACHINE_SWITCH $IN[3961]
-SIGNAL WS_ERRACK $IN[3962]
-SIGNAL WS_EXT_CTRL_ENABLE $IN[3963]
-SIGNAL WS_SIMULATION $IN[3964]
-SIGNAL WS_SPOT_MODE $IN[3965]
-SIGNAL WS_SEND_WIRE_MODE $IN[3966]
-SIGNAL WS_SUPPER_MODE $IN[3967]
-SIGNAL WS_LIFT_ARC $IN[3968]
-SIGNAL WS_OPERATOR_MODE $IN[3969]  TO $IN[3976]
-SIGNAL WS_PRO_NUMBER $IN[3977]  TO $IN[3984]
-SIGNAL WS_JOB_NUMBER $IN[3985]  TO $IN[3992]
-SIGNAL WS_WIRE_SPEED_CORR $IN[3993]  TO $IN[4008]
-SIGNAL WS_ARC_VOLT_CORR $IN[4009]  TO $IN[4024]
-SIGNAL WS_DYNAMIN_CORR $IN[4025]  TO $IN[4040]
-; $IN[4041]..$IN[4047] spare. $IN[4048] is outside this map.
+SIGNAL WS_WELD_MODE $IN[4145]
+SIGNAL WS_ARC_START $IN[4146]
+SIGNAL WS_ROBOT_READY $IN[4147]
+SIGNAL WS_GAS_READY $IN[4148]
+SIGNAL WS_GUN_CLEAR $IN[4149]
+SIGNAL WS_TEST_INCHING $IN[4150]
+SIGNAL WS_POS_SEARCH $IN[4151]
+SIGNAL WS_WIRE_BACK $IN[4152]
+SIGNAL WS_MACHINE_SWITCH $IN[4153]
+SIGNAL WS_ERRACK $IN[4154]
+SIGNAL WS_EXT_CTRL_ENABLE $IN[4155]
+SIGNAL WS_SIMULATION $IN[4156]
+SIGNAL WS_SPOT_MODE $IN[4157]
+SIGNAL WS_SEND_WIRE_MODE $IN[4158]
+SIGNAL WS_SUPPER_MODE $IN[4159]
+SIGNAL WS_LIFT_ARC $IN[4160]
+SIGNAL WS_OPERATOR_MODE $IN[4161]  TO $IN[4168]
+SIGNAL WS_PRO_NUMBER $IN[4169]  TO $IN[4176]
+SIGNAL WS_JOB_NUMBER $IN[4177]  TO $IN[4184]
+SIGNAL WS_WIRE_SPEED_CORR $IN[4185]  TO $IN[4200]
+SIGNAL WS_ARC_VOLT_CORR $IN[4201]  TO $IN[4216]
+SIGNAL WS_DYNAMIN_CORR $IN[4217]  TO $IN[4232]
 
 ;DEFINE OUT IO
 ; RobotGetData  $OUT[3025]..$OUT[3632]  76 bytes

@@ -51,7 +51,7 @@ namespace {
         return value;
     }
 
-    void writeXyzAbc(uint8_t* send, size_t bit, const WeldPoint& p)
+    void writePose(uint8_t* send, size_t bit, const WeldPoint& p)
     {
         setBits(send, bit + 0, 32, floatToU32(p.x));
         setBits(send, bit + 32, 32, floatToU32(p.y));
@@ -59,6 +59,9 @@ namespace {
         setBits(send, bit + 96, 32, floatToU32(p.a));
         setBits(send, bit + 128, 32, floatToU32(p.b));
         setBits(send, bit + 160, 32, floatToU32(p.c));
+        setBits(send, bit + 192, 32, floatToU32(p.e1));
+        setBits(send, bit + 224, 32, floatToU32(p.e2));
+        setBits(send, bit + 256, 32, floatToU32(p.e3));
     }
     uint8_t percent(float value)
     {
@@ -387,8 +390,8 @@ void ProfinetComm::readInputs()
         timeoutMs = m_layout.timeoutMs;
     }
 
-    uint8_t buf[kKukaImageBytes] = {};
-    if (!cifxTransfer(false, area, statusOff, kKukaImageBytes, buf, timeoutMs, true))
+    uint8_t buf[kKukaStatusBytes] = {};
+    if (!cifxTransfer(false, area, statusOff, kKukaStatusBytes, buf, timeoutMs, true))
         return;
 
     KukaFeedback feedback{};
@@ -529,18 +532,18 @@ void ProfinetComm::MakeSendWeldSeam(uint8_t* send, size_t len, const KukaHeader&
     std::memset(send, 0, len);
     MakeSendHeader(send, head);
     setBits(send, 64, 8, seam.weave);
-    writeXyzAbc(send, 384, seam.start);
-    writeXyzAbc(send, 576, seam.end);
-    setBits(send, 768, 32, floatToU32(seam.startTiltDeg));
-    setBits(send, 800, 32, floatToU32(seam.endTiltDeg));
-    setBits(send, 832, 32, floatToU32(seam.speedMmS));
-    setBits(send, 864, 32, floatToU32(seam.ampMm));
-    setBits(send, 896, 32, floatToU32(seam.freqHz));
+    writePose(send, 384, seam.start);
+    writePose(send, 672, seam.end);
+    setBits(send, 960, 32, floatToU32(seam.startTiltDeg));
+    setBits(send, 992, 32, floatToU32(seam.endTiltDeg));
+    setBits(send, 1024, 32, floatToU32(seam.speedMmS));
+    setBits(send, 1056, 32, floatToU32(seam.ampMm));
+    setBits(send, 1088, 32, floatToU32(seam.freqHz));
 }
 
 void ProfinetComm::MakeSendWeldData(uint8_t* send, size_t len, const WeldSendData& in)
 {
-    // Bit 0 is WS_WELD_MODE at $IN[3953], byte 116 of the 3025 image.
+    // Bit 0 is WS_WELD_MODE at $IN[4145], byte 140 of the 3025 image.
     if (!send || len < kKukaWeldSliceBytes)
         return;
     std::memset(send, 0, len);
@@ -611,7 +614,7 @@ void ProfinetComm::ParseRecvRobotData(const uint8_t* recv, size_t len, RobotGetD
 
 void ProfinetComm::ParseRecvImage(const uint8_t* recv, size_t len, KukaFeedback& out)
 {
-    if (!recv || len < kKukaImageBytes)
+    if (!recv || len < kKukaStatusBytes)
         return;
     ParseRecvRobotData(recv, len, out.robot);
     ParseRecvWeldData(recv + 76, len - 76, out.weld);

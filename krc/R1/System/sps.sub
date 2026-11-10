@@ -6,7 +6,7 @@ DEF  SPS ( )
   ; Cyclic publisher for RobotGetData, WeldGetData and the robot status that
   ; RobotGetData does not carry. Also the only writer of the EWM_* welder
   ; outputs. While a seam is busy the arc follows pc2kuka.src. Otherwise the
-  ; live WS_* image at $IN[3953] is copied through. PLC_EWM_* is not read.
+  ; live WS_* image at $IN[4145] is copied through. PLC_EWM_* is not read.
   ;
   ; Signal numbers are the $OUT map starting at 3025.
   ; Low index is LSB. 32-bit signals are IEEE754 binary32.
