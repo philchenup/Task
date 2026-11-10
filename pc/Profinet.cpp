@@ -323,19 +323,18 @@ void ProfinetComm::slotSendWeldPoints(const KukaHeader& head,
 }
 
 void ProfinetComm::slotSendWeldProcess(const KukaHeader& head,
-    const WeldSegment& seg1, const WeldSegment& seg2, const WeldSegment& seg3,
-    const WeldSegment& seg4, const WeldTaskParams& params)
+    const WeldSegment& seg, const WeldTaskParams& params)
 {
     if (QThread::currentThread() != thread()) {
-        QMetaObject::invokeMethod(this, [this, head, seg1, seg2, seg3, seg4, params]() {
-            slotSendWeldProcess(head, seg1, seg2, seg3, seg4, params);
+        QMetaObject::invokeMethod(this, [this, head, seg, params]() {
+            slotSendWeldProcess(head, seg, params);
         }, Qt::QueuedConnection);
         return;
     }
     KukaHeader h = prepare(head);
     h.cmd = KukaCmdWeldProcess;
     uint8_t buf[kKukaImageBytes] = {};
-    MakeSendWeldProcess(buf, sizeof(buf), h, seg1, seg2, seg3, seg4, params);
+    MakeSendWeldProcess(buf, sizeof(buf), h, seg, params);
     commitImage(buf);
 }
 
@@ -568,17 +567,13 @@ void ProfinetComm::MakeSendWeldPoints(uint8_t* send, size_t len, const KukaHeade
 }
 
 void ProfinetComm::MakeSendWeldProcess(uint8_t* send, size_t len, const KukaHeader& head,
-    const WeldSegment& seg1, const WeldSegment& seg2, const WeldSegment& seg3,
-    const WeldSegment& seg4, const WeldTaskParams& params)
+    const WeldSegment& seg, const WeldTaskParams& params)
 {
     if (!send || len < kKukaImageBytes)
         return;
     std::memset(send, 0, len);
     MakeSendHeader(send, head);
-    writeSegment(send, 128, seg1);
-    writeSegment(send, 288, seg2);
-    writeSegment(send, 448, seg3);
-    writeSegment(send, 608, seg4);
+    writeSegment(send, 128, seg);
     setBits(send, 768, 32, floatToU32(params.craterMm));
     setBits(send, 800, 32, floatToU32(params.approachMm));
     setBits(send, 832, 32, floatToU32(params.airSpeedMmS));

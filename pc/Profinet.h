@@ -27,7 +27,7 @@ class QTimer;
 //   1 realtime joint target
 //   2 joint trajectory, one waypoint per toggle, same bytes as command 1
 //   3 four weld endpoints and four corner distances
-//   5 up to four seam processes and the task parameters
+//   5 one seam recipe shared by every seam, plus the task parameters
 //   6 execute
 //   7 clear
 //
@@ -41,9 +41,9 @@ class QTimer;
 // head-to-tail seams, and the last seam runs from point 4 back to point 1.
 // A closed chain needs at least 3 points.
 //
-// Command 5: segment i is 20 bytes at bit 128 + i * 160. The task
-// parameters follow at bit 768. Send command 3, then command 5, then
-// command 6, all with the same task id.
+// Command 5: one 20 byte recipe at bit 128. The controller copies it onto
+// every seam. Bits 288..767 are spare. The task parameters follow at bit
+// 768. Send command 3, then command 5, then command 6, with one task id.
 //
 // Welder commands are not in this image. WeldSendData is written to the
 // PLC_EWM_* block at $IN[2001], byte offset 250, 40 bytes through $IN[2320].
@@ -309,9 +309,9 @@ public:
     void MakeSendWeldPoints(uint8_t* send, size_t len, const KukaHeader& head,
         const WeldPoint& p1, const WeldPoint& p2, const WeldPoint& p3, const WeldPoint& p4,
         float corner1Mm, float corner2Mm, float corner3Mm, float corner4Mm);
+    // One recipe. The controller applies it to every seam in the chain.
     void MakeSendWeldProcess(uint8_t* send, size_t len, const KukaHeader& head,
-        const WeldSegment& seg1, const WeldSegment& seg2, const WeldSegment& seg3,
-        const WeldSegment& seg4, const WeldTaskParams& params);
+        const WeldSegment& seg, const WeldTaskParams& params);
     void MakeSendWeldData(uint8_t* send, size_t len, const WeldSendData& in);
 
     void ParseRecvRobotData(const uint8_t* recv, size_t len, RobotGetData& in);
@@ -342,8 +342,7 @@ public slots:
         const WeldPoint& p1, const WeldPoint& p2, const WeldPoint& p3, const WeldPoint& p4,
         float corner1Mm, float corner2Mm, float corner3Mm, float corner4Mm);
     void slotSendWeldProcess(const KukaHeader& head,
-        const WeldSegment& seg1, const WeldSegment& seg2, const WeldSegment& seg3,
-        const WeldSegment& seg4, const WeldTaskParams& params);
+        const WeldSegment& seg, const WeldTaskParams& params);
     // cmd 7 clears. Any other value executes.
     void slotSendTaskCommand(const KukaHeader& head);
     void slotSendWeldData(const WeldSendData& data);

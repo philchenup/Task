@@ -1044,7 +1044,7 @@ SIGNAL WELD_START $OUT[2278]
 ;   RS_CMD 1  realtime joint     one A1..A6 E1..E3 target and dynamics
 ;   RS_CMD 2  joint trajectory   same bits as command 1, one waypoint
 ;   RS_CMD 3  weld points        4 endpoints X..C and 4 corner distances
-;   RS_CMD 5  weld process       up to 4 seam processes and task params
+;   RS_CMD 5  weld process       one shared seam recipe and task params
 ;   RS_CMD 6  execute the latched weld
 ;   RS_CMD 7  clear the weld buffer
 ; There is no command 4.
@@ -1149,44 +1149,22 @@ SIGNAL WC2 $IN[3953]  TO $IN[3984]
 SIGNAL WC3 $IN[3985]  TO $IN[4016]
 SIGNAL WC4 $IN[4017]  TO $IN[4048]
 
-; RS_CMD 5  up to 4 seam processes and the task parameters.
+; RS_CMD 5  one seam recipe, shared by every seam, plus the task parameters.
+; Assembly-plate seams use this single set. $IN[3313]..$IN[3792] stays spare.
 ; SPEED mm/s, AMP mm, FREQ Hz. WEAVE 0 off, 1 triangle, 2 sine.
 ; JOB, WIRE, VOLT and DYN are passed through to the welder as raw integers.
 ; CRATER and APPROACH are mm, AIRSPEED is mm/s, the four dynamics are percent.
 ; TC_SAMPLES is the number of interpolated points per weave period.
 ; 0 selects the default, 4 for a triangle and 8 for a sine.
-SIGNAL SG1_SPEED $IN[3153]  TO $IN[3184]
-SIGNAL SG1_AMP $IN[3185]  TO $IN[3216]
-SIGNAL SG1_FREQ $IN[3217]  TO $IN[3248]
-SIGNAL SG1_WEAVE $IN[3249]  TO $IN[3256]
-SIGNAL SG1_JOB $IN[3257]  TO $IN[3264]
-SIGNAL SG1_WIRE $IN[3265]  TO $IN[3280]
-SIGNAL SG1_VOLT $IN[3281]  TO $IN[3296]
-SIGNAL SG1_DYN $IN[3297]  TO $IN[3312]
-SIGNAL SG2_SPEED $IN[3313]  TO $IN[3344]
-SIGNAL SG2_AMP $IN[3345]  TO $IN[3376]
-SIGNAL SG2_FREQ $IN[3377]  TO $IN[3408]
-SIGNAL SG2_WEAVE $IN[3409]  TO $IN[3416]
-SIGNAL SG2_JOB $IN[3417]  TO $IN[3424]
-SIGNAL SG2_WIRE $IN[3425]  TO $IN[3440]
-SIGNAL SG2_VOLT $IN[3441]  TO $IN[3456]
-SIGNAL SG2_DYN $IN[3457]  TO $IN[3472]
-SIGNAL SG3_SPEED $IN[3473]  TO $IN[3504]
-SIGNAL SG3_AMP $IN[3505]  TO $IN[3536]
-SIGNAL SG3_FREQ $IN[3537]  TO $IN[3568]
-SIGNAL SG3_WEAVE $IN[3569]  TO $IN[3576]
-SIGNAL SG3_JOB $IN[3577]  TO $IN[3584]
-SIGNAL SG3_WIRE $IN[3585]  TO $IN[3600]
-SIGNAL SG3_VOLT $IN[3601]  TO $IN[3616]
-SIGNAL SG3_DYN $IN[3617]  TO $IN[3632]
-SIGNAL SG4_SPEED $IN[3633]  TO $IN[3664]
-SIGNAL SG4_AMP $IN[3665]  TO $IN[3696]
-SIGNAL SG4_FREQ $IN[3697]  TO $IN[3728]
-SIGNAL SG4_WEAVE $IN[3729]  TO $IN[3736]
-SIGNAL SG4_JOB $IN[3737]  TO $IN[3744]
-SIGNAL SG4_WIRE $IN[3745]  TO $IN[3760]
-SIGNAL SG4_VOLT $IN[3761]  TO $IN[3776]
-SIGNAL SG4_DYN $IN[3777]  TO $IN[3792]
+SIGNAL SG_SPEED $IN[3153]  TO $IN[3184]
+SIGNAL SG_AMP $IN[3185]  TO $IN[3216]
+SIGNAL SG_FREQ $IN[3217]  TO $IN[3248]
+SIGNAL SG_WEAVE $IN[3249]  TO $IN[3256]
+SIGNAL SG_JOB $IN[3257]  TO $IN[3264]
+SIGNAL SG_WIRE $IN[3265]  TO $IN[3280]
+SIGNAL SG_VOLT $IN[3281]  TO $IN[3296]
+SIGNAL SG_DYN $IN[3297]  TO $IN[3312]
+; $IN[3313]..$IN[3792] spare. One recipe covers every seam.
 SIGNAL TC_CRATER $IN[3793]  TO $IN[3824]
 SIGNAL TC_APPROACH $IN[3825]  TO $IN[3856]
 SIGNAL TC_AIRSPEED $IN[3857]  TO $IN[3888]
@@ -1300,7 +1278,7 @@ SIGNAL TC_PROGRESS $OUT[4017]  TO $OUT[4032]
 ; cannot see its local variables and because sps.sub is another interpreter.
 ; WT_PT holds 4 endpoints. WT_SEG holds up to 4 seams. Open chain uses
 ; pointCount-1 of them. RS_CLOSED uses pointCount, and the last seam
-; returns to point 1.
+; returns to point 1. Every seam is given the same process recipe.
 
 DECL WELD_PT_T WT_PT[4]
 DECL WELD_SEG_T WT_SEG[4]

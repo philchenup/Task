@@ -10,13 +10,13 @@ DEF pc2kuka( )
   ;   1 realtime joint target, A1..A6 E1..E3 and the percent dynamics
   ;   2 joint trajectory, the same bits, one waypoint per edge
   ;   3 four weld endpoints X..C and four corner distances
-  ;   5 up to 4 seam processes and the task parameters
+  ;   5 one seam recipe shared by every seam, plus the task parameters
   ;   6 weld the latched chain
   ;   7 clear the buffer
   ;
   ; RS_CLOSED = 0 keeps an open chain, so 4 points are 3 seams. RS_CLOSED = 1
   ; makes seams = points, so 4 points are 4 head-to-tail seams and the last
-  ; seam returns to point 1. Command 5 carries one process per seam. WEAVE 1
+  ; seam returns to point 1. Command 5 carries one recipe for every seam. WEAVE 1
   ; is a triangle and WEAVE 2 is a sine, both interpolated here with LIN.
   ; RS_CONT blends a stream so the arm does not stop on every 50 ms sample.
   ; This is interpreter streaming, not an RSI overlay: the PC waits for
@@ -311,53 +311,25 @@ DEF ReadPoints()
 END
 
 DEF ReadProcess()
+  ; Assembly-plate seams share one recipe. Copy it onto each seam.
+  DECL INT i
+
   NeedPage1()
   IF WT_ERR <> 0 THEN
     RETURN
   ENDIF
   IF WT_NSEAM >= 1 THEN
-    WT_SEG[1].SPEED = BitsToReal(SG1_SPEED)
-    WT_SEG[1].AMP = BitsToReal(SG1_AMP)
-    WT_SEG[1].FREQ = BitsToReal(SG1_FREQ)
-    WT_SEG[1].WEAVE = SG1_WEAVE
-    WT_SEG[1].JOB = SG1_JOB
-    WT_SEG[1].WIRE = SG1_WIRE
-    WT_SEG[1].VOLT = SG1_VOLT
-    WT_SEG[1].DYN = SG1_DYN
-    WT_SEG[1].SVALID = TRUE
-  ENDIF
-  IF WT_NSEAM >= 2 THEN
-    WT_SEG[2].SPEED = BitsToReal(SG2_SPEED)
-    WT_SEG[2].AMP = BitsToReal(SG2_AMP)
-    WT_SEG[2].FREQ = BitsToReal(SG2_FREQ)
-    WT_SEG[2].WEAVE = SG2_WEAVE
-    WT_SEG[2].JOB = SG2_JOB
-    WT_SEG[2].WIRE = SG2_WIRE
-    WT_SEG[2].VOLT = SG2_VOLT
-    WT_SEG[2].DYN = SG2_DYN
-    WT_SEG[2].SVALID = TRUE
-  ENDIF
-  IF WT_NSEAM >= 3 THEN
-    WT_SEG[3].SPEED = BitsToReal(SG3_SPEED)
-    WT_SEG[3].AMP = BitsToReal(SG3_AMP)
-    WT_SEG[3].FREQ = BitsToReal(SG3_FREQ)
-    WT_SEG[3].WEAVE = SG3_WEAVE
-    WT_SEG[3].JOB = SG3_JOB
-    WT_SEG[3].WIRE = SG3_WIRE
-    WT_SEG[3].VOLT = SG3_VOLT
-    WT_SEG[3].DYN = SG3_DYN
-    WT_SEG[3].SVALID = TRUE
-  ENDIF
-  IF WT_NSEAM >= 4 THEN
-    WT_SEG[4].SPEED = BitsToReal(SG4_SPEED)
-    WT_SEG[4].AMP = BitsToReal(SG4_AMP)
-    WT_SEG[4].FREQ = BitsToReal(SG4_FREQ)
-    WT_SEG[4].WEAVE = SG4_WEAVE
-    WT_SEG[4].JOB = SG4_JOB
-    WT_SEG[4].WIRE = SG4_WIRE
-    WT_SEG[4].VOLT = SG4_VOLT
-    WT_SEG[4].DYN = SG4_DYN
-    WT_SEG[4].SVALID = TRUE
+    FOR i = 1 TO WT_NSEAM
+      WT_SEG[i].SPEED = BitsToReal(SG_SPEED)
+      WT_SEG[i].AMP = BitsToReal(SG_AMP)
+      WT_SEG[i].FREQ = BitsToReal(SG_FREQ)
+      WT_SEG[i].WEAVE = SG_WEAVE
+      WT_SEG[i].JOB = SG_JOB
+      WT_SEG[i].WIRE = SG_WIRE
+      WT_SEG[i].VOLT = SG_VOLT
+      WT_SEG[i].DYN = SG_DYN
+      WT_SEG[i].SVALID = TRUE
+    ENDFOR
   ENDIF
   WT_CRATER = BitsToReal(TC_CRATER)
   WT_APPROACH = BitsToReal(TC_APPROACH)
