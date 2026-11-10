@@ -1,0 +1,10 @@
+# eMc: camera frame wrt end-effector (tool0/TCP) frame, from hand-eye calibration (tx ty tz [m], thetau [rad])
+rows: 6
+cols: 1
+data: 
+  - [-0.0312543]
+  - [-0.0584638]
+  - [0.0309834]
+  - [-0.00506562]
+  - [-0.00293325]
+  - [0.0117901]
