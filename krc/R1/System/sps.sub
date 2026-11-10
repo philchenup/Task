@@ -18,8 +18,8 @@ DEF  SPS ( )
   ; RG_E1..RG_E3     $AXIS_ACT.E1..E3
   ; RG_E4..RG_E6     $AXIS_ACT.E4..E6
   ; RG_SJ1..RG_SJ6   $AXIS_ACT.A1..A6, deg
-  ; RG_X..RG_C       $POS_ACT in the tool and base pc2kuka.src applied
-  ;                  BAS() writes $TOOL and $BASE, which this submit cannot do
+  ; RG_X..RG_C       $POS_ACT, published after pc2kuka.src has applied a tool
+  ;                  Reading XYZABC before that stops this submit: tool not programmed
   ; RG_STATUS_S/T    $POS_ACT.S and .T, the arm configuration
   ; RG_TCP_VEL       $VEL_ACT in mm/s, the actual path speed
   ; RG_OV_PRO        $OV_PRO, which scales the programmed weld speed
@@ -176,16 +176,30 @@ DEF  SPS ( )
     RG_SJ5 = RealToBits(rA[5])
     RG_SJ6 = RealToBits(rA[6])
 
-    RG_X = RealToBits($POS_ACT.X)
-    RG_Y = RealToBits($POS_ACT.Y)
-    RG_Z = RealToBits($POS_ACT.Z)
-    RG_A = RealToBits($POS_ACT.A)
-    RG_B = RealToBits($POS_ACT.B)
-    RG_C = RealToBits($POS_ACT.C)
-
-    RG_STATUS_S = $POS_ACT.S
-    RG_STATUS_T = $POS_ACT.T
-    RG_TCP_VEL = RealToBits($VEL_ACT * 1000.0)
+    ; $POS_ACT and $VEL_ACT are XYZABC in the active tool. Until pc2kuka.src
+    ; has executed BAS(#TOOL), that tool is not programmed and the read
+    ; stops the submit. Joint values above do not need a tool.
+    IF WT_FRAME_READY THEN
+      RG_X = RealToBits($POS_ACT.X)
+      RG_Y = RealToBits($POS_ACT.Y)
+      RG_Z = RealToBits($POS_ACT.Z)
+      RG_A = RealToBits($POS_ACT.A)
+      RG_B = RealToBits($POS_ACT.B)
+      RG_C = RealToBits($POS_ACT.C)
+      RG_STATUS_S = $POS_ACT.S
+      RG_STATUS_T = $POS_ACT.T
+      RG_TCP_VEL = RealToBits($VEL_ACT * 1000.0)
+    ELSE
+      RG_X = 0
+      RG_Y = 0
+      RG_Z = 0
+      RG_A = 0
+      RG_B = 0
+      RG_C = 0
+      RG_STATUS_S = 0
+      RG_STATUS_T = 0
+      RG_TCP_VEL = 0
+    ENDIF
     RG_OV_PRO = $OV_PRO
     RG_ACT_TOOL = WT_TOOL
     RG_ACT_BASE = WT_BASE
