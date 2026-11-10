@@ -303,19 +303,6 @@ void ProfinetComm::slotSendJointTrajectory(const KukaHeader& head, const JointCo
     commitImage(buf);
 }
 
-void ProfinetComm::slotSendTrajectory(const KukaHeader& head, const TrajectoryCommand& cmd)
-{
-    if (QThread::currentThread() != thread()) {
-        QMetaObject::invokeMethod(this, [this, head, cmd]() { slotSendTrajectory(head, cmd); }, Qt::QueuedConnection);
-        return;
-    }
-    KukaHeader h = prepare(head);
-    h.cmd = KukaCmdTrajectory;
-    uint8_t buf[kKukaImageBytes] = {};
-    MakeSendTrajectory(buf, sizeof(buf), h, cmd);
-    commitImage(buf);
-}
-
 void ProfinetComm::slotSendWeldPoints(const KukaHeader& head,
     const WeldPoint& p1, const WeldPoint& p2, const WeldPoint& p3, const WeldPoint& p4,
     float corner1Mm, float corner2Mm, float corner3Mm, float corner4Mm)
@@ -560,28 +547,6 @@ void ProfinetComm::MakeSendJoint(uint8_t* send, size_t len, const KukaHeader& he
     setBits(send, 448, 32, floatToU32(cmd.axisAcc));
     setBits(send, 480, 32, floatToU32(cmd.extSpeed));
     setBits(send, 512, 32, floatToU32(cmd.extAcc));
-}
-
-void ProfinetComm::MakeSendTrajectory(uint8_t* send, size_t len, const KukaHeader& head, const TrajectoryCommand& cmd)
-{
-    if (!send || len < kKukaImageBytes)
-        return;
-    std::memset(send, 0, len);
-    MakeSendHeader(send, head);
-    setBits(send, 128, 32, floatToU32(cmd.x));
-    setBits(send, 160, 32, floatToU32(cmd.y));
-    setBits(send, 192, 32, floatToU32(cmd.z));
-    setBits(send, 224, 32, floatToU32(cmd.a));
-    setBits(send, 256, 32, floatToU32(cmd.b));
-    setBits(send, 288, 32, floatToU32(cmd.c));
-    setBits(send, 320, 32, floatToU32(cmd.e1));
-    setBits(send, 352, 32, floatToU32(cmd.e2));
-    setBits(send, 384, 32, floatToU32(cmd.e3));
-    setBits(send, 416, 8, cmd.s);
-    setBits(send, 424, 8, cmd.t);
-    setBits(send, 448, 32, floatToU32(cmd.speed));
-    setBits(send, 480, 32, floatToU32(cmd.acc));
-    setBits(send, 512, 32, floatToU32(cmd.ori));
 }
 
 void ProfinetComm::MakeSendWeldPoints(uint8_t* send, size_t len, const KukaHeader& head,

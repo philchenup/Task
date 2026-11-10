@@ -10,7 +10,6 @@ DEF pc2kuka( )
   ;   1 realtime joint target, A1..A6 E1..E3 and the percent dynamics
   ;   2 joint trajectory, the same bits, one waypoint per edge
   ;   3 four weld endpoints X..C and four corner distances
-  ;   4 Cartesian stream, X..C E1..E3 S T and the path dynamics
   ;   5 up to 4 seam processes and the task parameters
   ;   6 weld the latched chain
   ;   7 clear the buffer
@@ -98,8 +97,6 @@ DEF pc2kuka( )
       JointTrajMove()
     CASE 3
       ReadPoints()
-    CASE 4
-      CartMove()
     CASE 5
       ReadProcess()
     CASE 6
@@ -448,52 +445,6 @@ DEF JointTarget(nBlend:IN)
   ELSE
     $APO.CPTP = 0
     PTP aTgt
-  ENDIF
-  NoteStream()
-END
-
-DEF CartMove()
-  DECL E6POS pTgt
-  DECL REAL rBlend
-
-  RequireEnable()
-  IF WT_ERR <> 0 THEN
-    RETURN
-  ENDIF
-  ApplyFrame()
-  IF WT_ERR <> 0 THEN
-    RETURN
-  ENDIF
-  SetCartDyn()
-  pTgt = $POS_ACT
-  pTgt.X = BitsToReal(RT_X)
-  pTgt.Y = BitsToReal(RT_Y)
-  pTgt.Z = BitsToReal(RT_Z)
-  pTgt.A = BitsToReal(RT_A)
-  pTgt.B = BitsToReal(RT_B)
-  pTgt.C = BitsToReal(RT_C)
-  pTgt.E1 = BitsToReal(RT_E1)
-  pTgt.E2 = BitsToReal(RT_E2)
-  pTgt.E3 = BitsToReal(RT_E3)
-  pTgt.E4 = $AXIS_ACT.E4
-  pTgt.E5 = $AXIS_ACT.E5
-  pTgt.E6 = $AXIS_ACT.E6
-  pTgt.S = RT_S
-  pTgt.T = RT_T
-  IF RS_CONT THEN
-    ; about one 50 ms sample of travel, so consecutive targets blend
-    rBlend = BitsToReal(RT_SPEED) * 0.05
-    IF rBlend < 1.0 THEN
-      rBlend = 1.0
-    ENDIF
-    IF rBlend > 50.0 THEN
-      rBlend = 50.0
-    ENDIF
-    $APO.CDIS = rBlend
-    LIN pTgt C_DIS
-  ELSE
-    $APO.CDIS = 0.0
-    LIN pTgt
   ENDIF
   NoteStream()
 END
@@ -996,32 +947,6 @@ DEF SetStoredPtp()
     RedAccExAx[2] = WT_EXACC
     RedAccExAx[3] = WT_EXACC
   ENDIF
-END
-
-DEF SetCartDyn()
-  DECL REAL rV
-
-  rV = BitsToReal(RT_SPEED) / 1000.0
-  IF rV < 0.001 THEN
-    rV = 0.05
-  ENDIF
-  IF rV > 2.0 THEN
-    rV = 2.0
-  ENDIF
-  $VEL.CP = rV
-  rV = BitsToReal(RT_ACC)
-  IF (rV < 0.05) OR (rV > 10.0) THEN
-    rV = 2.3
-  ENDIF
-  $ACC.CP = rV
-  rV = BitsToReal(RT_ORI)
-  IF (rV < 1.0) OR (rV > 400.0) THEN
-    rV = 200.0
-  ENDIF
-  $VEL.ORI1 = rV
-  $VEL.ORI2 = rV
-  $ACC.ORI1 = 100.0
-  $ACC.ORI2 = 100.0
 END
 
 DEF SetAirSpeed()

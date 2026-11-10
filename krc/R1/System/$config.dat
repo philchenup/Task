@@ -1044,10 +1044,10 @@ SIGNAL WELD_START $OUT[2278]
 ;   RS_CMD 1  realtime joint     one A1..A6 E1..E3 target and dynamics
 ;   RS_CMD 2  joint trajectory   same bits as command 1, one waypoint
 ;   RS_CMD 3  weld points        4 endpoints X..C and 4 corner distances
-;   RS_CMD 4  Cartesian stream   X..C E1..E3 S T, path speed, acc, ori
 ;   RS_CMD 5  weld process       up to 4 seam processes and task params
 ;   RS_CMD 6  execute the latched weld
 ;   RS_CMD 7  clear the weld buffer
+; There is no command 4.
 ;
 ; Command 3 is one transfer. Four XYZABC poses are 96 bytes and four
 ; corner distances are 16 bytes, which fills the payload. E1..E3 and S/T
@@ -1062,8 +1062,7 @@ SIGNAL WELD_START $OUT[2278]
 ; point 1. A closed chain needs at least 3 points.
 ;
 ; Command 2 is the joint-waypoint stream. Command 1 is the single live
-; joint target. Both read RJ_*. Command 4 keeps the Cartesian stream
-; that used to be command 2.
+; joint target. Both read RJ_*.
 ;
 ; The PC writes the whole 128 bytes in one transfer and flips RS_TOGGLE
 ; in that same transfer. The robot latches on the edge. RS_CONT requests
@@ -1116,24 +1115,6 @@ SIGNAL RJ_AXIS_SPEED $IN[3441]  TO $IN[3472]
 SIGNAL RJ_AXIS_ACC $IN[3473]  TO $IN[3504]
 SIGNAL RJ_EXT_SPEED $IN[3505]  TO $IN[3536]
 SIGNAL RJ_EXT_ACC $IN[3537]  TO $IN[3568]
-
-; RS_CMD 4  Cartesian stream, overlaying the joint image.
-; RT_SPEED is mm/s, RT_ACC is m/s^2, RT_ORI is deg/s.
-; S and T are the arm configuration and must be copied from RG_STATUS_S / T.
-SIGNAL RT_X $IN[3153]  TO $IN[3184]
-SIGNAL RT_Y $IN[3185]  TO $IN[3216]
-SIGNAL RT_Z $IN[3217]  TO $IN[3248]
-SIGNAL RT_A $IN[3249]  TO $IN[3280]
-SIGNAL RT_B $IN[3281]  TO $IN[3312]
-SIGNAL RT_C $IN[3313]  TO $IN[3344]
-SIGNAL RT_E1 $IN[3345]  TO $IN[3376]
-SIGNAL RT_E2 $IN[3377]  TO $IN[3408]
-SIGNAL RT_E3 $IN[3409]  TO $IN[3440]
-SIGNAL RT_S $IN[3441]  TO $IN[3448]
-SIGNAL RT_T $IN[3449]  TO $IN[3456]
-SIGNAL RT_SPEED $IN[3473]  TO $IN[3504]
-SIGNAL RT_ACC $IN[3505]  TO $IN[3536]
-SIGNAL RT_ORI $IN[3537]  TO $IN[3568]
 
 ; RS_CMD 3  four endpoints and one corner distance per endpoint.
 ; Coordinates are mm and deg in the selected base and tool.

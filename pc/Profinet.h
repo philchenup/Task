@@ -27,7 +27,6 @@ class QTimer;
 //   1 realtime joint target
 //   2 joint trajectory, one waypoint per toggle, same bytes as command 1
 //   3 four weld endpoints and four corner distances
-//   4 Cartesian stream
 //   5 up to four seam processes and the task parameters
 //   6 execute
 //   7 clear
@@ -60,7 +59,6 @@ enum KukaCmd : uint8_t {
     KukaCmdJoint = 1,
     KukaCmdJointTraj = 2,
     KukaCmdWeldPoints = 3,
-    KukaCmdTrajectory = 4,
     KukaCmdWeldProcess = 5,
     KukaCmdWeldExecute = 6,
     KukaCmdWeldClear = 7
@@ -218,17 +216,6 @@ struct JointCommand
     float extAcc = 100.f;
 };
 
-struct TrajectoryCommand
-{
-    float x = 0.f, y = 0.f, z = 0.f, a = 0.f, b = 0.f, c = 0.f;
-    float e1 = 0.f, e2 = 0.f, e3 = 0.f;
-    uint8_t s = 0;
-    uint8_t t = 0;
-    float speed = 50.f; // mm/s
-    float acc = 2.3f;   // m/s^2
-    float ori = 200.f;  // deg/s
-};
-
 // XYZABC only. Four of these plus four corner distances fill the image.
 // The controller latches E1..E3, S and T from the actual pose.
 struct WeldPoint
@@ -317,7 +304,6 @@ public:
 
     void MakeSendHeader(uint8_t* send, const KukaHeader& head);
     void MakeSendJoint(uint8_t* send, size_t len, const KukaHeader& head, const JointCommand& cmd);
-    void MakeSendTrajectory(uint8_t* send, size_t len, const KukaHeader& head, const TrajectoryCommand& cmd);
     // cornerNMm is the symmetric corner distance at point N, in mm.
     // An open chain ignores the distances on the first and last used points.
     void MakeSendWeldPoints(uint8_t* send, size_t len, const KukaHeader& head,
@@ -350,8 +336,6 @@ public slots:
     void slotSendJoint(const KukaHeader& head, const JointCommand& cmd);
     // Command 2. One joint waypoint, packed with the same layout as command 1.
     void slotSendJointTrajectory(const KukaHeader& head, const JointCommand& cmd);
-    // Command 4. Cartesian stream.
-    void slotSendTrajectory(const KukaHeader& head, const TrajectoryCommand& cmd);
     // Command 3. All four endpoints and the four corner distances at once.
     // head.pointCount is 1..4. head.closed selects 4 seams instead of 3.
     void slotSendWeldPoints(const KukaHeader& head,
