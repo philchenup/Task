@@ -18,7 +18,8 @@ DEF  SPS ( )
   ; RG_E1..RG_E3     $AXIS_ACT.E1..E3
   ; RG_E4..RG_E6     $AXIS_ACT.E4..E6
   ; RG_SJ1..RG_SJ6   $AXIS_ACT.A1..A6, deg
-  ; RG_X..RG_C       $POS_ACT in the current tool and base
+  ; RG_X..RG_C       $POS_ACT in the tool and base pc2kuka.src applied
+  ;                  BAS() writes $TOOL and $BASE, which this submit cannot do
   ; RG_STATUS_S/T    $POS_ACT.S and .T, the arm configuration
   ; RG_TCP_VEL       $VEL_ACT in mm/s, the actual path speed
   ; RG_OV_PRO        $OV_PRO, which scales the programmed weld speed
