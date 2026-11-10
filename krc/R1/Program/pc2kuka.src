@@ -9,8 +9,8 @@ DEF pc2kuka( )
   ;
   ;   1 realtime joint target, A1..A6 E1..E3 and the percent dynamics
   ;   2 joint trajectory, the same bits, one waypoint per edge
-  ;   3 four weld endpoints X..C and four corner distances
-  ;   5 one seam recipe shared by every seam, plus the task parameters
+  ;   3 four weld endpoints, each X Y Z A B C and gantry E2
+  ;   5 one seam recipe shared by every seam, four corner distances, and the task parameters
   ;   6 weld the latched chain
   ;   7 clear the buffer
   ;
@@ -222,12 +222,11 @@ DEF NeedPage1()
 END
 
 DEF LatchPose(nI:IN)
-  ; E1, E3 and S/T are not in the point image. E2 is the gantry and is
-  ; overwritten from command 5. Until then it stays at the actual pose.
+  ; E2 is already loaded with the endpoint. The host does not send E1 or
+  ; E3. Copy those, and the unused external axes, from the actual pose.
   DECL INT nI
 
   WT_PT[nI].P.E1 = $AXIS_ACT.E1
-  WT_PT[nI].P.E2 = $AXIS_ACT.E2
   WT_PT[nI].P.E3 = $AXIS_ACT.E3
   WT_PT[nI].P.E4 = $AXIS_ACT.E4
   WT_PT[nI].P.E5 = $AXIS_ACT.E5
@@ -240,8 +239,6 @@ DEF LatchPose(nI:IN)
 END
 
 DEF ReadPoints()
-  DECL INT nI
-
   NewTask()
   IF WT_ERR <> 0 THEN
     RETURN
@@ -258,8 +255,7 @@ DEF ReadPoints()
     WT_PT[1].P.A = BitsToReal(WP1_A)
     WT_PT[1].P.B = BitsToReal(WP1_B)
     WT_PT[1].P.C = BitsToReal(WP1_C)
-    WT_PT[1].CPRE = BitsToReal(WC1)
-    WT_PT[1].CPOST = WT_PT[1].CPRE
+    WT_PT[1].P.E2 = BitsToReal(WP1_E2)
     LatchPose(1)
   ENDIF
   IF WT_NPT >= 2 THEN
@@ -269,8 +265,7 @@ DEF ReadPoints()
     WT_PT[2].P.A = BitsToReal(WP2_A)
     WT_PT[2].P.B = BitsToReal(WP2_B)
     WT_PT[2].P.C = BitsToReal(WP2_C)
-    WT_PT[2].CPRE = BitsToReal(WC2)
-    WT_PT[2].CPOST = WT_PT[2].CPRE
+    WT_PT[2].P.E2 = BitsToReal(WP2_E2)
     LatchPose(2)
   ENDIF
   IF WT_NPT >= 3 THEN
@@ -280,8 +275,7 @@ DEF ReadPoints()
     WT_PT[3].P.A = BitsToReal(WP3_A)
     WT_PT[3].P.B = BitsToReal(WP3_B)
     WT_PT[3].P.C = BitsToReal(WP3_C)
-    WT_PT[3].CPRE = BitsToReal(WC3)
-    WT_PT[3].CPOST = WT_PT[3].CPRE
+    WT_PT[3].P.E2 = BitsToReal(WP3_E2)
     LatchPose(3)
   ENDIF
   IF WT_NPT >= 4 THEN
@@ -291,18 +285,8 @@ DEF ReadPoints()
     WT_PT[4].P.A = BitsToReal(WP4_A)
     WT_PT[4].P.B = BitsToReal(WP4_B)
     WT_PT[4].P.C = BitsToReal(WP4_C)
-    WT_PT[4].CPRE = BitsToReal(WC4)
-    WT_PT[4].CPOST = WT_PT[4].CPRE
+    WT_PT[4].P.E2 = BitsToReal(WP4_E2)
     LatchPose(4)
-  ENDIF
-
-  ; An open chain has no corner at the first or the last point.
-  IF NOT(WT_CLOSED) THEN
-    WT_PT[1].CPRE = 0.0
-    WT_PT[1].CPOST = 0.0
-    nI = WT_NPT
-    WT_PT[nI].CPRE = 0.0
-    WT_PT[nI].CPOST = 0.0
   ENDIF
 
   TC_PAGE_MASK = TC_PAGE_MASK B_OR 1
@@ -332,16 +316,28 @@ DEF ReadProcess()
     ENDFOR
   ENDIF
   IF WT_NPT >= 1 THEN
-    WT_PT[1].P.E2 = BitsToReal(WP1_E2)
+    WT_PT[1].CPRE = BitsToReal(WC1)
+    WT_PT[1].CPOST = WT_PT[1].CPRE
   ENDIF
   IF WT_NPT >= 2 THEN
-    WT_PT[2].P.E2 = BitsToReal(WP2_E2)
+    WT_PT[2].CPRE = BitsToReal(WC2)
+    WT_PT[2].CPOST = WT_PT[2].CPRE
   ENDIF
   IF WT_NPT >= 3 THEN
-    WT_PT[3].P.E2 = BitsToReal(WP3_E2)
+    WT_PT[3].CPRE = BitsToReal(WC3)
+    WT_PT[3].CPOST = WT_PT[3].CPRE
   ENDIF
   IF WT_NPT >= 4 THEN
-    WT_PT[4].P.E2 = BitsToReal(WP4_E2)
+    WT_PT[4].CPRE = BitsToReal(WC4)
+    WT_PT[4].CPOST = WT_PT[4].CPRE
+  ENDIF
+  ; An open chain has no corner at the first or the last point.
+  IF NOT(WT_CLOSED) THEN
+    WT_PT[1].CPRE = 0.0
+    WT_PT[1].CPOST = 0.0
+    i = WT_NPT
+    WT_PT[i].CPRE = 0.0
+    WT_PT[i].CPOST = 0.0
   ENDIF
   WT_CRATER = BitsToReal(TC_CRATER)
   WT_APPROACH = BitsToReal(TC_APPROACH)
