@@ -910,9 +910,11 @@ DECL FRAME IL_Target
 ;----------------------------------
 ; Weld task channel types
 ;----------------------------------
-; A task holds at most 4 endpoints, so at most 3 straight seams. Points 2 and
-; 3 are corners when the chain reaches them. WEAVE is 0 off, 1 triangle,
-; 2 sine. The robot interpolates that weave itself.
+; A task holds at most 4 endpoints. An open chain has seams = points - 1.
+; RS_CLOSED has seams = points, so 4 points are 4 head-to-tail seams.
+; CPRE and CPOST carry the same corner distance. The point image has no
+; rotation speed or dwell, so CROT and CDWELL stay 0.
+; WEAVE is 0 off, 1 triangle, 2 sine. The robot interpolates that weave.
 
 STRUC WELD_PT_T E6POS P,REAL CPRE,CPOST,CROT,CDWELL,BOOL PVALID
 STRUC WELD_SEG_T REAL SPEED,AMP,FREQ,INT WEAVE,JOB,WIRE,VOLT,DYN,BOOL SVALID
@@ -1035,33 +1037,45 @@ SIGNAL WELD_START $OUT[2278]
 ; 32 bit fields are IEEE754 binary32. A SIGNAL is an integer view of those
 ; bits, so src converts them with BitsToReal / RealToBits.
 ;
-; 3025..4048 is 128 bytes. Joint streaming, Cartesian streaming and the weld
-; task all use this one image. RS_CMD says which reading is valid. The other
+; 3025..4048 is 128 bytes. The header is 16 bytes and the payload is the
+; other 112. RS_CMD says which reading of the payload is valid. The other
 ; names are aliases of the same bits and are not written by the robot.
 ;
-;   RS_CMD 1  joint stream     A1..A6, E1..E3, axis and external dynamics
-;   RS_CMD 2  Cartesian stream X..C, E1..E3, S, T, path speed, acc, ori rate
-;   RS_CMD 3  weld page 1      endpoints 1 and 2, corner at point 2
-;   RS_CMD 4  weld page 2      endpoints 3 and 4, corner at point 3
-;   RS_CMD 5  weld page 3      up to 3 seam processes and the task parameters
+;   RS_CMD 1  realtime joint     one A1..A6 E1..E3 target and dynamics
+;   RS_CMD 2  joint trajectory   same bits as command 1, one waypoint
+;   RS_CMD 3  weld points        4 endpoints X..C and 4 corner distances
+;   RS_CMD 4  Cartesian stream   X..C E1..E3 S T, path speed, acc, ori
+;   RS_CMD 5  weld process       up to 4 seam processes and task params
 ;   RS_CMD 6  execute the latched weld
 ;   RS_CMD 7  clear the weld buffer
 ;
-; A chain has 1..4 endpoints, so 0..3 straight seams. Points 2 and 3 are the
-; corners. Page 1 is always required. Page 2 is required from 3 endpoints.
-; Page 3 is required once there is a seam.
+; Command 3 is one transfer. Four XYZABC poses are 96 bytes and four
+; corner distances are 16 bytes, which fills the payload. E1..E3 and S/T
+; are not in this image; pc2kuka.src copies them from the actual pose,
+; so the positioner stays where it is. A corner distance is millimetres
+; and is applied on both sides of that vertex.
 ;
-; The PC writes the whole 128 bytes in one transfer and flips RS_TOGGLE in
-; that same transfer. The robot latches on the edge. RS_CONT requests
-; approximation, which is what a 50 ms stream needs in order to keep moving.
-; RS_ENABLE, RS_RESET and RS_GOTO_HOME are acted on outside the weld pages.
-; RS_PC_ALIVE is the PC watchdog. RS_ABORT stops the motion.
+; RS_CLOSED = 0 is an open chain: seams = point count - 1. Four points
+; are then 3 seams, and the distances on the two end points are ignored.
+; RS_CLOSED = 1 is a closed chain: seams = point count. Four points are
+; then 4 head-to-tail seams, and the last seam runs from point 4 to
+; point 1. A closed chain needs at least 3 points.
+;
+; Command 2 is the joint-waypoint stream. Command 1 is the single live
+; joint target. Both read RJ_*. Command 4 keeps the Cartesian stream
+; that used to be command 2.
+;
+; The PC writes the whole 128 bytes in one transfer and flips RS_TOGGLE
+; in that same transfer. The robot latches on the edge. RS_CONT requests
+; approximation, which is what a 50 ms stream needs in order to keep
+; moving. RS_ENABLE, RS_RESET and RS_GOTO_HOME are acted on outside the
+; weld pages. RS_PC_ALIVE is the PC watchdog. RS_ABORT stops the motion.
 ; RS_ARC_TRACK is reserved for the laser inputs at $IN[2169].
 ;
 ; Byte 0 of this image is $IN[3025]. If byte 0 of the Profinet image is
 ; $IN[1], the cifX offset is (3025-1)/8 = 378.
-; Welder commands are not in this image. They stay on PLC_EWM_* at $IN[2001],
-; cifX offset 250.
+; Welder commands are not in this image. They stay on PLC_EWM_* at
+; $IN[2001], cifX offset 250.
 
 ;DEFINE IN IO
 ; Header  $IN[3025]..$IN[3152], 16 bytes. Valid for every command.
@@ -1078,12 +1092,17 @@ SIGNAL RS_CONT $IN[3055]
 SIGNAL RS_ARC_TRACK $IN[3056]
 SIGNAL RS_TASK_ID $IN[3057]  TO $IN[3072]
 SIGNAL RS_POINT_COUNT $IN[3073]  TO $IN[3080]
-; $IN[3081]..$IN[3088] reserved
+SIGNAL RS_CLOSED $IN[3081]
+; $IN[3082]..$IN[3088] reserved
 SIGNAL RS_FRAME_NO $IN[3089]  TO $IN[3104]
+; $IN[3105]..$IN[3152] unused so the payload stays on a 16 byte boundary
 
 ; Payload aliases, $IN[3153]..$IN[4048]. Read only the group selected by RS_CMD.
 
-; RS_CMD 1  joint stream. Speed and acceleration are percent, 1..100.
+; RS_CMD 1 and 2  joint target. Speed and acceleration are percent, 1..100.
+; Command 1 is one live target. Command 2 is the next waypoint of a
+; joint trajectory. The PC waits for TC_ACK_TOGGLE between waypoints
+; when every vertex has to be executed.
 SIGNAL RJ_A1 $IN[3153]  TO $IN[3184]
 SIGNAL RJ_A2 $IN[3185]  TO $IN[3216]
 SIGNAL RJ_A3 $IN[3217]  TO $IN[3248]
@@ -1098,7 +1117,7 @@ SIGNAL RJ_AXIS_ACC $IN[3473]  TO $IN[3504]
 SIGNAL RJ_EXT_SPEED $IN[3505]  TO $IN[3536]
 SIGNAL RJ_EXT_ACC $IN[3537]  TO $IN[3568]
 
-; RS_CMD 2  Cartesian stream, overlaying the joint image.
+; RS_CMD 4  Cartesian stream, overlaying the joint image.
 ; RT_SPEED is mm/s, RT_ACC is m/s^2, RT_ORI is deg/s.
 ; S and T are the arm configuration and must be copied from RG_STATUS_S / T.
 SIGNAL RT_X $IN[3153]  TO $IN[3184]
@@ -1116,67 +1135,40 @@ SIGNAL RT_SPEED $IN[3473]  TO $IN[3504]
 SIGNAL RT_ACC $IN[3505]  TO $IN[3536]
 SIGNAL RT_ORI $IN[3537]  TO $IN[3568]
 
-; RS_CMD 3  endpoints 1 and 2 and the corner at point 2.
+; RS_CMD 3  four endpoints and one corner distance per endpoint.
 ; Coordinates are mm and deg in the selected base and tool.
-; WC2_PRE and WC2_POST are mm, WC2_ROT is rpm, WC2_DWELL is units of 10 ms.
-; The corner is used only when the chain has at least 3 endpoints.
+; WCn is the corner distance at point n, in mm.
 SIGNAL WP1_X $IN[3153]  TO $IN[3184]
 SIGNAL WP1_Y $IN[3185]  TO $IN[3216]
 SIGNAL WP1_Z $IN[3217]  TO $IN[3248]
 SIGNAL WP1_A $IN[3249]  TO $IN[3280]
 SIGNAL WP1_B $IN[3281]  TO $IN[3312]
 SIGNAL WP1_C $IN[3313]  TO $IN[3344]
-SIGNAL WP1_E1 $IN[3345]  TO $IN[3376]
-SIGNAL WP1_E2 $IN[3377]  TO $IN[3408]
-SIGNAL WP1_E3 $IN[3409]  TO $IN[3440]
-SIGNAL WP1_S $IN[3441]  TO $IN[3448]
-SIGNAL WP1_T $IN[3449]  TO $IN[3456]
-SIGNAL WP2_X $IN[3457]  TO $IN[3488]
-SIGNAL WP2_Y $IN[3489]  TO $IN[3520]
-SIGNAL WP2_Z $IN[3521]  TO $IN[3552]
-SIGNAL WP2_A $IN[3553]  TO $IN[3584]
-SIGNAL WP2_B $IN[3585]  TO $IN[3616]
-SIGNAL WP2_C $IN[3617]  TO $IN[3648]
-SIGNAL WP2_E1 $IN[3649]  TO $IN[3680]
-SIGNAL WP2_E2 $IN[3681]  TO $IN[3712]
-SIGNAL WP2_E3 $IN[3713]  TO $IN[3744]
-SIGNAL WP2_S $IN[3745]  TO $IN[3752]
-SIGNAL WP2_T $IN[3753]  TO $IN[3760]
-SIGNAL WC2_PRE $IN[3761]  TO $IN[3792]
-SIGNAL WC2_POST $IN[3793]  TO $IN[3824]
-SIGNAL WC2_ROT $IN[3825]  TO $IN[3856]
-SIGNAL WC2_DWELL $IN[3857]  TO $IN[3872]
+SIGNAL WP2_X $IN[3345]  TO $IN[3376]
+SIGNAL WP2_Y $IN[3377]  TO $IN[3408]
+SIGNAL WP2_Z $IN[3409]  TO $IN[3440]
+SIGNAL WP2_A $IN[3441]  TO $IN[3472]
+SIGNAL WP2_B $IN[3473]  TO $IN[3504]
+SIGNAL WP2_C $IN[3505]  TO $IN[3536]
+SIGNAL WP3_X $IN[3537]  TO $IN[3568]
+SIGNAL WP3_Y $IN[3569]  TO $IN[3600]
+SIGNAL WP3_Z $IN[3601]  TO $IN[3632]
+SIGNAL WP3_A $IN[3633]  TO $IN[3664]
+SIGNAL WP3_B $IN[3665]  TO $IN[3696]
+SIGNAL WP3_C $IN[3697]  TO $IN[3728]
+SIGNAL WP4_X $IN[3729]  TO $IN[3760]
+SIGNAL WP4_Y $IN[3761]  TO $IN[3792]
+SIGNAL WP4_Z $IN[3793]  TO $IN[3824]
+SIGNAL WP4_A $IN[3825]  TO $IN[3856]
+SIGNAL WP4_B $IN[3857]  TO $IN[3888]
+SIGNAL WP4_C $IN[3889]  TO $IN[3920]
+; Corner distances, mm. Open chain uses WC2 and WC3. Closed uses all four.
+SIGNAL WC1 $IN[3921]  TO $IN[3952]
+SIGNAL WC2 $IN[3953]  TO $IN[3984]
+SIGNAL WC3 $IN[3985]  TO $IN[4016]
+SIGNAL WC4 $IN[4017]  TO $IN[4048]
 
-; RS_CMD 4  endpoints 3 and 4 and the corner at point 3.
-; Same bit positions as page 1. The corner is used only for a 4 point chain.
-SIGNAL WP3_X $IN[3153]  TO $IN[3184]
-SIGNAL WP3_Y $IN[3185]  TO $IN[3216]
-SIGNAL WP3_Z $IN[3217]  TO $IN[3248]
-SIGNAL WP3_A $IN[3249]  TO $IN[3280]
-SIGNAL WP3_B $IN[3281]  TO $IN[3312]
-SIGNAL WP3_C $IN[3313]  TO $IN[3344]
-SIGNAL WP3_E1 $IN[3345]  TO $IN[3376]
-SIGNAL WP3_E2 $IN[3377]  TO $IN[3408]
-SIGNAL WP3_E3 $IN[3409]  TO $IN[3440]
-SIGNAL WP3_S $IN[3441]  TO $IN[3448]
-SIGNAL WP3_T $IN[3449]  TO $IN[3456]
-SIGNAL WP4_X $IN[3457]  TO $IN[3488]
-SIGNAL WP4_Y $IN[3489]  TO $IN[3520]
-SIGNAL WP4_Z $IN[3521]  TO $IN[3552]
-SIGNAL WP4_A $IN[3553]  TO $IN[3584]
-SIGNAL WP4_B $IN[3585]  TO $IN[3616]
-SIGNAL WP4_C $IN[3617]  TO $IN[3648]
-SIGNAL WP4_E1 $IN[3649]  TO $IN[3680]
-SIGNAL WP4_E2 $IN[3681]  TO $IN[3712]
-SIGNAL WP4_E3 $IN[3713]  TO $IN[3744]
-SIGNAL WP4_S $IN[3745]  TO $IN[3752]
-SIGNAL WP4_T $IN[3753]  TO $IN[3760]
-SIGNAL WC3_PRE $IN[3761]  TO $IN[3792]
-SIGNAL WC3_POST $IN[3793]  TO $IN[3824]
-SIGNAL WC3_ROT $IN[3825]  TO $IN[3856]
-SIGNAL WC3_DWELL $IN[3857]  TO $IN[3872]
-
-; RS_CMD 5  up to 3 seam processes and the task parameters.
+; RS_CMD 5  up to 4 seam processes and the task parameters.
 ; SPEED mm/s, AMP mm, FREQ Hz. WEAVE 0 off, 1 triangle, 2 sine.
 ; JOB, WIRE, VOLT and DYN are passed through to the welder as raw integers.
 ; CRATER and APPROACH are mm, AIRSPEED is mm/s, the four dynamics are percent.
@@ -1206,14 +1198,23 @@ SIGNAL SG3_JOB $IN[3577]  TO $IN[3584]
 SIGNAL SG3_WIRE $IN[3585]  TO $IN[3600]
 SIGNAL SG3_VOLT $IN[3601]  TO $IN[3616]
 SIGNAL SG3_DYN $IN[3617]  TO $IN[3632]
-SIGNAL TC_CRATER $IN[3633]  TO $IN[3664]
-SIGNAL TC_APPROACH $IN[3665]  TO $IN[3696]
-SIGNAL TC_AIRSPEED $IN[3697]  TO $IN[3728]
-SIGNAL TC_AXSPEED $IN[3729]  TO $IN[3760]
-SIGNAL TC_AXACC $IN[3761]  TO $IN[3792]
-SIGNAL TC_EXSPEED $IN[3793]  TO $IN[3824]
-SIGNAL TC_EXACC $IN[3825]  TO $IN[3856]
-SIGNAL TC_SAMPLES $IN[3857]  TO $IN[3864]
+SIGNAL SG4_SPEED $IN[3633]  TO $IN[3664]
+SIGNAL SG4_AMP $IN[3665]  TO $IN[3696]
+SIGNAL SG4_FREQ $IN[3697]  TO $IN[3728]
+SIGNAL SG4_WEAVE $IN[3729]  TO $IN[3736]
+SIGNAL SG4_JOB $IN[3737]  TO $IN[3744]
+SIGNAL SG4_WIRE $IN[3745]  TO $IN[3760]
+SIGNAL SG4_VOLT $IN[3761]  TO $IN[3776]
+SIGNAL SG4_DYN $IN[3777]  TO $IN[3792]
+SIGNAL TC_CRATER $IN[3793]  TO $IN[3824]
+SIGNAL TC_APPROACH $IN[3825]  TO $IN[3856]
+SIGNAL TC_AIRSPEED $IN[3857]  TO $IN[3888]
+SIGNAL TC_AXSPEED $IN[3889]  TO $IN[3920]
+SIGNAL TC_AXACC $IN[3921]  TO $IN[3952]
+SIGNAL TC_EXSPEED $IN[3953]  TO $IN[3984]
+SIGNAL TC_EXACC $IN[3985]  TO $IN[4016]
+SIGNAL TC_SAMPLES $IN[4017]  TO $IN[4024]
+; $IN[4025]..$IN[4048] spare for this command
 
 ;DEFINE OUT IO
 ; RobotGetData  $OUT[3025]..$OUT[3632]  76 bytes
@@ -1283,7 +1284,7 @@ SIGNAL RG_E5 $OUT[3857]  TO $OUT[3888]
 SIGNAL RG_E6 $OUT[3889]  TO $OUT[3920]
 
 ; Task channel ack  $OUT[3921]..$OUT[4032]  14 bytes
-; TC_PAGE_MASK  bit 0 endpoints 1..2, bit 1 endpoints 3..4, bit 2 process
+; TC_PAGE_MASK  bit 0 weld points, bit 1 process
 ; TC_TASK_STATE 0 idle, 1 receiving, 2 ready, 3 welding, 4 done, 5 error
 ; TC_ERR_CODE   1 bad point count, 2 page missing, 3 bad tool or base,
 ;               4 arc start timeout, 5 aborted, 6 unknown command,
@@ -1316,11 +1317,14 @@ SIGNAL TC_PROGRESS $OUT[4017]  TO $OUT[4032]
 ; pc2kuka.src latches the task here and sps.sub reads the welder request
 ; fields. The buffer is global because the local subprograms of pc2kuka.src
 ; cannot see its local variables and because sps.sub is another interpreter.
-; WT_PT holds 4 endpoints. WT_SEG holds the 3 seams those endpoints define.
+; WT_PT holds 4 endpoints. WT_SEG holds up to 4 seams. Open chain uses
+; pointCount-1 of them. RS_CLOSED uses pointCount, and the last seam
+; returns to point 1.
 
 DECL WELD_PT_T WT_PT[4]
-DECL WELD_SEG_T WT_SEG[3]
+DECL WELD_SEG_T WT_SEG[4]
 DECL INT WT_MAXPT=4
+DECL INT WT_MAXSEAM=4
 DECL INT WT_TASK_ID=0
 DECL INT WT_NSEAM=0
 DECL INT WT_NPT=0
@@ -1337,6 +1341,7 @@ DECL REAL WT_EXSPEED=100.000
 DECL REAL WT_EXACC=100.000
 DECL BOOL WT_ABORTED=FALSE
 DECL BOOL WT_ARC_TRACK=FALSE
+DECL BOOL WT_CLOSED=FALSE
 
 ; welder request, written by pc2kuka.src and applied by sps.sub so that the
 ; EWM_* outputs have exactly one writer

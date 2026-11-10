@@ -4,23 +4,24 @@
 &PARAM TEMPLATE = C:\KRC\Roboter\Template\vorgabe
 DEF pc2kuka( )
 
-  ; One Profinet image, $IN[3025]..$IN[4048], shared by three jobs.
-  ; RS_CMD selects the reading. The robot latches on every RS_TOGGLE edge.
+  ; One Profinet image, $IN[3025]..$IN[4048]. RS_CMD selects the reading.
+  ; The robot latches on every RS_TOGGLE edge.
   ;
-  ;   1 joint stream, A1..A6 E1..E3 and the percent dynamics
-  ;   2 Cartesian stream, X..C E1..E3 S T and the path dynamics
-  ;   3 weld endpoints 1 and 2, plus the corner at point 2
-  ;   4 weld endpoints 3 and 4, plus the corner at point 3
-  ;   5 up to 3 seam processes and the task parameters
+  ;   1 realtime joint target, A1..A6 E1..E3 and the percent dynamics
+  ;   2 joint trajectory, the same bits, one waypoint per edge
+  ;   3 four weld endpoints X..C and four corner distances
+  ;   4 Cartesian stream, X..C E1..E3 S T and the path dynamics
+  ;   5 up to 4 seam processes and the task parameters
   ;   6 weld the latched chain
   ;   7 clear the buffer
   ;
-  ; A chain has 1..4 endpoints and therefore 0..3 straight seams. Page 3
-  ; carries one process per seam. WEAVE 1 is a triangle and WEAVE 2 is a
-  ; sine, both interpolated here with LIN. RS_CONT blends a stream so the
-  ; arm does not stop on every 50 ms sample. This is interpreter streaming,
-  ; not an RSI overlay: the PC waits for TC_ACK_TOGGLE before the next edge
-  ; if every sample has to be executed.
+  ; RS_CLOSED = 0 keeps an open chain, so 4 points are 3 seams. RS_CLOSED = 1
+  ; makes seams = points, so 4 points are 4 head-to-tail seams and the last
+  ; seam returns to point 1. Command 5 carries one process per seam. WEAVE 1
+  ; is a triangle and WEAVE 2 is a sine, both interpolated here with LIN.
+  ; RS_CONT blends a stream so the arm does not stop on every 50 ms sample.
+  ; This is interpreter streaming, not an RSI overlay: the PC waits for
+  ; TC_ACK_TOGGLE before the next edge if every sample has to be executed.
   ;
   ; RS_RESET and RS_GOTO_HOME are pulses and are handled before RS_CMD.
   ; RS_ABORT brakes the motion from any line. This program never writes
@@ -94,11 +95,11 @@ DEF pc2kuka( )
     CASE 1
       JointMove()
     CASE 2
-      CartMove()
+      JointTrajMove()
     CASE 3
-      ReadPoints(1)
+      ReadPoints()
     CASE 4
-      ReadPoints(2)
+      CartMove()
     CASE 5
       ReadProcess()
     CASE 6
@@ -108,6 +109,7 @@ DEF pc2kuka( )
       WT_TASK_ID = 0
       WT_NPT = 0
       WT_NSEAM = 0
+      WT_CLOSED = FALSE
       WT_ERR = 0
       TC_ERR_CODE = 0
       TC_TASK_STATE = 0
@@ -140,7 +142,7 @@ DEF ClearTask()
     WT_PT[i].CROT = 0.0
     WT_PT[i].CDWELL = 0.0
   ENDFOR
-  FOR i = 1 TO WT_MAXPT - 1
+  FOR i = 1 TO WT_MAXSEAM
     WT_SEG[i].SVALID = FALSE
     WT_SEG[i].SPEED = 0.0
     WT_SEG[i].AMP = 0.0
@@ -152,13 +154,17 @@ DEF ClearTask()
     WT_SEG[i].DYN = 0
   ENDFOR
   WT_SAMPLES = 0
+  WT_CLOSED = FALSE
   TC_PAGE_MASK = 0
   TC_SEG_ACTIVE = 0
   TC_PROGRESS = 0
 END
 
 DEF NewTask()
-  ; page 1 opens the task and drops anything latched before it
+  ; Command 3 opens the task and drops anything latched before it.
+  ; Open chain: seams = points - 1. Closed chain: seams = points, so four
+  ; points are four head-to-tail seams and the last one returns to point 1.
+
   WT_TASK_ID = RS_TASK_ID
   WT_NPT = RS_POINT_COUNT
   WT_TOOL = RS_TOOL_ID
@@ -166,19 +172,43 @@ DEF NewTask()
   WT_ARC_TRACK = RS_ARC_TRACK
   WT_ERR = 0
   ClearTask()
-  IF (WT_NPT < 1) OR (WT_NPT > WT_MAXPT) THEN
+  IF RS_CLOSED THEN
+    WT_CLOSED = TRUE
+  ELSE
+    WT_CLOSED = FALSE
+  ENDIF
+  IF WT_CLOSED THEN
+    IF (WT_NPT < 3) OR (WT_NPT > WT_MAXPT) THEN
+      WT_NSEAM = 0
+      WT_ERR = 1
+      TC_ERR_CODE = 1
+      TC_TASK_STATE = 5
+      RETURN
+    ENDIF
+    WT_NSEAM = WT_NPT
+  ELSE
+    IF (WT_NPT < 1) OR (WT_NPT > WT_MAXPT) THEN
+      WT_NSEAM = 0
+      WT_ERR = 1
+      TC_ERR_CODE = 1
+      TC_TASK_STATE = 5
+      RETURN
+    ENDIF
+    WT_NSEAM = WT_NPT - 1
+  ENDIF
+  IF WT_NSEAM > WT_MAXSEAM THEN
     WT_NSEAM = 0
     WT_ERR = 1
     TC_ERR_CODE = 1
     TC_TASK_STATE = 5
     RETURN
   ENDIF
-  WT_NSEAM = WT_NPT - 1
   TC_ERR_CODE = 0
   TC_TASK_STATE = 1
 END
 
 DEF NeedPage1()
+  ; Command 3 has to be latched, and the task id has to match.
   IF (TC_PAGE_MASK B_AND 1) <> 1 THEN
     WT_ERR = 2
     TC_ERR_CODE = 2
@@ -194,61 +224,57 @@ DEF NeedPage1()
   WT_ERR = 0
 END
 
-DEF ReadPoints(nPage:IN)
-  DECL INT nPage
+DEF LatchPose(nI:IN)
+  ; E1..E3 and S/T are not in the point image. The positioner and the arm
+  ; configuration are taken from the pose at the moment the points arrive.
+  DECL INT nI
 
-  IF nPage == 1 THEN
-    NewTask()
-    IF WT_ERR <> 0 THEN
-      RETURN
-    ENDIF
+  WT_PT[nI].P.E1 = $AXIS_ACT.E1
+  WT_PT[nI].P.E2 = $AXIS_ACT.E2
+  WT_PT[nI].P.E3 = $AXIS_ACT.E3
+  WT_PT[nI].P.E4 = $AXIS_ACT.E4
+  WT_PT[nI].P.E5 = $AXIS_ACT.E5
+  WT_PT[nI].P.E6 = $AXIS_ACT.E6
+  WT_PT[nI].P.S = $POS_ACT.S
+  WT_PT[nI].P.T = $POS_ACT.T
+  WT_PT[nI].CROT = 0.0
+  WT_PT[nI].CDWELL = 0.0
+  WT_PT[nI].PVALID = TRUE
+END
+
+DEF ReadPoints()
+  DECL INT nI
+
+  NewTask()
+  IF WT_ERR <> 0 THEN
+    RETURN
+  ENDIF
+  ApplyFrame()
+  IF WT_ERR <> 0 THEN
+    RETURN
+  ENDIF
+
+  IF WT_NPT >= 1 THEN
     WT_PT[1].P.X = BitsToReal(WP1_X)
     WT_PT[1].P.Y = BitsToReal(WP1_Y)
     WT_PT[1].P.Z = BitsToReal(WP1_Z)
     WT_PT[1].P.A = BitsToReal(WP1_A)
     WT_PT[1].P.B = BitsToReal(WP1_B)
     WT_PT[1].P.C = BitsToReal(WP1_C)
-    WT_PT[1].P.E1 = BitsToReal(WP1_E1)
-    WT_PT[1].P.E2 = BitsToReal(WP1_E2)
-    WT_PT[1].P.E3 = BitsToReal(WP1_E3)
-    WT_PT[1].P.E4 = $AXIS_ACT.E4
-    WT_PT[1].P.E5 = $AXIS_ACT.E5
-    WT_PT[1].P.E6 = $AXIS_ACT.E6
-    WT_PT[1].P.S = WP1_S
-    WT_PT[1].P.T = WP1_T
-    WT_PT[1].PVALID = TRUE
-    IF WT_NPT >= 2 THEN
-      WT_PT[2].P.X = BitsToReal(WP2_X)
-      WT_PT[2].P.Y = BitsToReal(WP2_Y)
-      WT_PT[2].P.Z = BitsToReal(WP2_Z)
-      WT_PT[2].P.A = BitsToReal(WP2_A)
-      WT_PT[2].P.B = BitsToReal(WP2_B)
-      WT_PT[2].P.C = BitsToReal(WP2_C)
-      WT_PT[2].P.E1 = BitsToReal(WP2_E1)
-      WT_PT[2].P.E2 = BitsToReal(WP2_E2)
-      WT_PT[2].P.E3 = BitsToReal(WP2_E3)
-      WT_PT[2].P.E4 = $AXIS_ACT.E4
-      WT_PT[2].P.E5 = $AXIS_ACT.E5
-      WT_PT[2].P.E6 = $AXIS_ACT.E6
-      WT_PT[2].P.S = WP2_S
-      WT_PT[2].P.T = WP2_T
-      WT_PT[2].PVALID = TRUE
-    ENDIF
-    IF WT_NPT >= 3 THEN
-      WT_PT[2].CPRE = BitsToReal(WC2_PRE)
-      WT_PT[2].CPOST = BitsToReal(WC2_POST)
-      WT_PT[2].CROT = BitsToReal(WC2_ROT)
-      WT_PT[2].CDWELL = WC2_DWELL / 100.0
-    ENDIF
-    TC_PAGE_MASK = TC_PAGE_MASK B_OR 1
-    TC_ERR_CODE = 0
-    TC_TASK_STATE = 1
-    RETURN
+    WT_PT[1].CPRE = BitsToReal(WC1)
+    WT_PT[1].CPOST = WT_PT[1].CPRE
+    LatchPose(1)
   ENDIF
-
-  NeedPage1()
-  IF WT_ERR <> 0 THEN
-    RETURN
+  IF WT_NPT >= 2 THEN
+    WT_PT[2].P.X = BitsToReal(WP2_X)
+    WT_PT[2].P.Y = BitsToReal(WP2_Y)
+    WT_PT[2].P.Z = BitsToReal(WP2_Z)
+    WT_PT[2].P.A = BitsToReal(WP2_A)
+    WT_PT[2].P.B = BitsToReal(WP2_B)
+    WT_PT[2].P.C = BitsToReal(WP2_C)
+    WT_PT[2].CPRE = BitsToReal(WC2)
+    WT_PT[2].CPOST = WT_PT[2].CPRE
+    LatchPose(2)
   ENDIF
   IF WT_NPT >= 3 THEN
     WT_PT[3].P.X = BitsToReal(WP3_X)
@@ -257,15 +283,9 @@ DEF ReadPoints(nPage:IN)
     WT_PT[3].P.A = BitsToReal(WP3_A)
     WT_PT[3].P.B = BitsToReal(WP3_B)
     WT_PT[3].P.C = BitsToReal(WP3_C)
-    WT_PT[3].P.E1 = BitsToReal(WP3_E1)
-    WT_PT[3].P.E2 = BitsToReal(WP3_E2)
-    WT_PT[3].P.E3 = BitsToReal(WP3_E3)
-    WT_PT[3].P.E4 = $AXIS_ACT.E4
-    WT_PT[3].P.E5 = $AXIS_ACT.E5
-    WT_PT[3].P.E6 = $AXIS_ACT.E6
-    WT_PT[3].P.S = WP3_S
-    WT_PT[3].P.T = WP3_T
-    WT_PT[3].PVALID = TRUE
+    WT_PT[3].CPRE = BitsToReal(WC3)
+    WT_PT[3].CPOST = WT_PT[3].CPRE
+    LatchPose(3)
   ENDIF
   IF WT_NPT >= 4 THEN
     WT_PT[4].P.X = BitsToReal(WP4_X)
@@ -274,23 +294,21 @@ DEF ReadPoints(nPage:IN)
     WT_PT[4].P.A = BitsToReal(WP4_A)
     WT_PT[4].P.B = BitsToReal(WP4_B)
     WT_PT[4].P.C = BitsToReal(WP4_C)
-    WT_PT[4].P.E1 = BitsToReal(WP4_E1)
-    WT_PT[4].P.E2 = BitsToReal(WP4_E2)
-    WT_PT[4].P.E3 = BitsToReal(WP4_E3)
-    WT_PT[4].P.E4 = $AXIS_ACT.E4
-    WT_PT[4].P.E5 = $AXIS_ACT.E5
-    WT_PT[4].P.E6 = $AXIS_ACT.E6
-    WT_PT[4].P.S = WP4_S
-    WT_PT[4].P.T = WP4_T
-    WT_PT[4].PVALID = TRUE
-    WT_PT[3].CPRE = BitsToReal(WC3_PRE)
-    WT_PT[3].CPOST = BitsToReal(WC3_POST)
-    WT_PT[3].CROT = BitsToReal(WC3_ROT)
-    WT_PT[3].CDWELL = WC3_DWELL / 100.0
+    WT_PT[4].CPRE = BitsToReal(WC4)
+    WT_PT[4].CPOST = WT_PT[4].CPRE
+    LatchPose(4)
   ENDIF
-  IF WT_NPT >= 3 THEN
-    TC_PAGE_MASK = TC_PAGE_MASK B_OR 2
+
+  ; An open chain has no corner at the first or the last point.
+  IF NOT(WT_CLOSED) THEN
+    WT_PT[1].CPRE = 0.0
+    WT_PT[1].CPOST = 0.0
+    nI = WT_NPT
+    WT_PT[nI].CPRE = 0.0
+    WT_PT[nI].CPOST = 0.0
   ENDIF
+
+  TC_PAGE_MASK = TC_PAGE_MASK B_OR 1
   TC_ERR_CODE = 0
   TC_TASK_STATE = 1
 END
@@ -333,6 +351,17 @@ DEF ReadProcess()
     WT_SEG[3].DYN = SG3_DYN
     WT_SEG[3].SVALID = TRUE
   ENDIF
+  IF WT_NSEAM >= 4 THEN
+    WT_SEG[4].SPEED = BitsToReal(SG4_SPEED)
+    WT_SEG[4].AMP = BitsToReal(SG4_AMP)
+    WT_SEG[4].FREQ = BitsToReal(SG4_FREQ)
+    WT_SEG[4].WEAVE = SG4_WEAVE
+    WT_SEG[4].JOB = SG4_JOB
+    WT_SEG[4].WIRE = SG4_WIRE
+    WT_SEG[4].VOLT = SG4_VOLT
+    WT_SEG[4].DYN = SG4_DYN
+    WT_SEG[4].SVALID = TRUE
+  ENDIF
   WT_CRATER = BitsToReal(TC_CRATER)
   WT_APPROACH = BitsToReal(TC_APPROACH)
   WT_AIRSPEED = BitsToReal(TC_AIRSPEED)
@@ -341,7 +370,7 @@ DEF ReadProcess()
   WT_EXSPEED = BitsToReal(TC_EXSPEED)
   WT_EXACC = BitsToReal(TC_EXACC)
   WT_SAMPLES = TC_SAMPLES
-  TC_PAGE_MASK = TC_PAGE_MASK B_OR 4
+  TC_PAGE_MASK = TC_PAGE_MASK B_OR 2
   TC_ERR_CODE = 0
   TC_TASK_STATE = 1
 END
@@ -375,6 +404,18 @@ DEF RequireEnable()
 END
 
 DEF JointMove()
+  ; Command 1, one live joint target.
+  JointTarget(50)
+END
+
+DEF JointTrajMove()
+  ; Command 2, one joint waypoint of a streamed trajectory. Same RJ_* image
+  ; as command 1. The larger approximation lets a dense path keep moving.
+  JointTarget(80)
+END
+
+DEF JointTarget(nBlend:IN)
+  DECL INT nBlend
   DECL E6AXIS aTgt
 
   RequireEnable()
@@ -398,8 +439,11 @@ DEF JointMove()
   aTgt.E4 = $AXIS_ACT.E4
   aTgt.E5 = $AXIS_ACT.E5
   aTgt.E6 = $AXIS_ACT.E6
+  IF (nBlend < 1) OR (nBlend > 100) THEN
+    nBlend = 50
+  ENDIF
   IF RS_CONT THEN
-    $APO.CPTP = 50
+    $APO.CPTP = nBlend
     PTP aTgt C_PTP
   ELSE
     $APO.CPTP = 0
@@ -506,11 +550,8 @@ DEF TaskExec()
   ENDIF
   IF WT_ERR == 0 THEN
     nMask = 1
-    IF WT_NPT >= 3 THEN
+    IF WT_NSEAM >= 1 THEN
       nMask = nMask B_OR 2
-    ENDIF
-    IF WT_NPT >= 2 THEN
-      nMask = nMask B_OR 4
     ENDIF
     IF (TC_PAGE_MASK B_AND nMask) <> nMask THEN
       WT_ERR = 2
@@ -537,24 +578,7 @@ DEF TaskExec()
     ENDIF
   ENDIF
   IF WT_ERR == 0 THEN
-    IF WT_NPT >= 3 THEN
-      IF WT_PT[2].CPRE >= PosDist(WT_PT[1].P,WT_PT[2].P) THEN
-        WT_ERR = 7
-      ENDIF
-      IF WT_PT[2].CPOST >= PosDist(WT_PT[2].P,WT_PT[3].P) THEN
-        WT_ERR = 7
-      ENDIF
-    ENDIF
-  ENDIF
-  IF WT_ERR == 0 THEN
-    IF WT_NPT >= 4 THEN
-      IF (WT_PT[2].CPOST + WT_PT[3].CPRE) >= PosDist(WT_PT[2].P,WT_PT[3].P) THEN
-        WT_ERR = 7
-      ENDIF
-      IF WT_PT[3].CPOST >= PosDist(WT_PT[3].P,WT_PT[4].P) THEN
-        WT_ERR = 7
-      ENDIF
-    ENDIF
+    CheckCorners()
   ENDIF
   IF WT_ERR <> 0 THEN
     TC_ERR_CODE = WT_ERR
@@ -604,59 +628,170 @@ DEF TaskExec()
   TC_PROGRESS = 10000
   SetAirSpeed()
   IF WT_APPROACH > 1.0 THEN
-    TorchShift(WT_PT[WT_NPT].P,-WT_APPROACH,0)
+    IF WT_CLOSED THEN
+      TorchShift(WT_PT[1].P,-WT_APPROACH,0)
+    ELSE
+      TorchShift(WT_PT[WT_NPT].P,-WT_APPROACH,0)
+    ENDIF
   ENDIF
   TC_SEG_ACTIVE = 0
   TC_TASK_BUSY = FALSE
   TC_TASK_STATE = 4
 END
 
+DEF CheckCorners()
+  ; Each corner distance has to leave some of its two seams. On one seam the
+  ; outgoing distance of the start vertex and the incoming distance of the
+  ; end vertex are added.
+  DECL INT i
+  DECL INT nA
+  DECL INT nB
+  DECL REAL rLen
+  DECL REAL rKeep
+  DECL BOOL bStart
+  DECL BOOL bEnd
+
+  IF WT_NSEAM < 1 THEN
+    RETURN
+  ENDIF
+  FOR i = 1 TO WT_NSEAM
+    nA = i
+    IF i < WT_NPT THEN
+      nB = i + 1
+    ELSE
+      nB = 1
+    ENDIF
+    rLen = PosDist(WT_PT[nA].P,WT_PT[nB].P)
+    rKeep = 0.0
+    bStart = WT_CLOSED
+    IF nA > 1 THEN
+      bStart = TRUE
+    ENDIF
+    bEnd = WT_CLOSED
+    IF nB < WT_NPT THEN
+      bEnd = TRUE
+    ENDIF
+    IF bStart THEN
+      IF WT_PT[nA].CPOST >= rLen THEN
+        WT_ERR = 7
+        RETURN
+      ENDIF
+      rKeep = WT_PT[nA].CPOST
+    ENDIF
+    IF bEnd THEN
+      IF WT_PT[nB].CPRE >= rLen THEN
+        WT_ERR = 7
+        RETURN
+      ENDIF
+      rKeep = rKeep + WT_PT[nB].CPRE
+    ENDIF
+    IF rKeep >= rLen THEN
+      WT_ERR = 7
+      RETURN
+    ENDIF
+  ENDFOR
+END
+
 DEF WeldChain()
   DECL INT i
+  DECL INT nA
+  DECL INT nB
+  DECL INT nC
   DECL REAL rLen
   DECL REAL rF
   DECL E6POS pCur
   DECL E6POS pTgt
+  DECL BOOL bCorner
+  DECL BOOL bExit
 
   pCur = WT_PT[1].P
+  ; Closed loop: weld the departure side of point 1 before seam 1, and do
+  ; not weld it again when the chain returns to point 1.
+  IF WT_CLOSED THEN
+    SetSegProc(1)
+    rLen = PosDist(WT_PT[1].P,WT_PT[2].P)
+    IF (WT_PT[1].CPOST > 0.1) AND (rLen > WT_PT[1].CPOST) THEN
+      rF = WT_PT[1].CPOST / rLen
+      LerpPos(WT_PT[1].P,WT_PT[2].P,rF,pTgt)
+      LIN pTgt
+      pCur = pTgt
+    ENDIF
+  ENDIF
+
   FOR i = 1 TO WT_NSEAM
     TC_SEG_ACTIVE = i
     TC_PROGRESS = ((i - 1) * 10000) / WT_NSEAM
     SetSegProc(i)
-    pTgt = WT_PT[i + 1].P
-    IF i < WT_NSEAM THEN
-      rLen = PosDist(WT_PT[i].P,WT_PT[i + 1].P)
-      IF (WT_PT[i + 1].CPRE > 0.1) AND (rLen > WT_PT[i + 1].CPRE) THEN
-        rF = 1.0 - (WT_PT[i + 1].CPRE / rLen)
-        LerpPos(WT_PT[i].P,WT_PT[i + 1].P,rF,pTgt)
+    nA = i
+    IF i < WT_NPT THEN
+      nB = i + 1
+    ELSE
+      nB = 1
+    ENDIF
+    bCorner = FALSE
+    IF WT_CLOSED THEN
+      bCorner = TRUE
+    ELSE
+      IF i < WT_NSEAM THEN
+        bCorner = TRUE
+      ENDIF
+    ENDIF
+    pTgt = WT_PT[nB].P
+    IF bCorner THEN
+      rLen = PosDist(WT_PT[nA].P,WT_PT[nB].P)
+      IF (WT_PT[nB].CPRE > 0.1) AND (rLen > WT_PT[nB].CPRE) THEN
+        rF = 1.0 - (WT_PT[nB].CPRE / rLen)
+        LerpPos(WT_PT[nA].P,WT_PT[nB].P,rF,pTgt)
       ENDIF
     ENDIF
     WeldLine(i,pCur,pTgt)
     pCur = pTgt
-    IF i < WT_NSEAM THEN
-      SetCornerProc(i + 1)
-      pTgt = WT_PT[i + 1].P
+    IF bCorner THEN
+      SetCornerProc(nB)
+      pTgt = WT_PT[nB].P
       LIN pTgt
       pCur = pTgt
-      IF WT_PT[i + 1].CDWELL > 0.01 THEN
-        WAIT SEC WT_PT[i + 1].CDWELL
+      IF WT_PT[nB].CDWELL > 0.01 THEN
+        WAIT SEC WT_PT[nB].CDWELL
       ENDIF
-      rLen = PosDist(WT_PT[i + 1].P,WT_PT[i + 2].P)
-      IF (WT_PT[i + 1].CPOST > 0.1) AND (rLen > WT_PT[i + 1].CPOST) THEN
-        rF = WT_PT[i + 1].CPOST / rLen
-        LerpPos(WT_PT[i + 1].P,WT_PT[i + 2].P,rF,pTgt)
-        LIN pTgt
-        pCur = pTgt
+      bExit = TRUE
+      IF WT_CLOSED THEN
+        IF nB == 1 THEN
+          bExit = FALSE
+        ENDIF
+      ENDIF
+      IF bExit THEN
+        IF nB >= WT_NPT THEN
+          nC = 1
+        ELSE
+          nC = nB + 1
+        ENDIF
+        rLen = PosDist(WT_PT[nB].P,WT_PT[nC].P)
+        IF (WT_PT[nB].CPOST > 0.1) AND (rLen > WT_PT[nB].CPOST) THEN
+          rF = WT_PT[nB].CPOST / rLen
+          LerpPos(WT_PT[nB].P,WT_PT[nC].P,rF,pTgt)
+          LIN pTgt
+          pCur = pTgt
+        ENDIF
       ENDIF
     ENDIF
   ENDFOR
 
   IF WT_CRATER > 0.1 THEN
-    rLen = PosDist(WT_PT[WT_NPT - 1].P,WT_PT[WT_NPT].P)
-    IF rLen > WT_CRATER THEN
-      rF = 1.0 - (WT_CRATER / rLen)
-      LerpPos(WT_PT[WT_NPT - 1].P,WT_PT[WT_NPT].P,rF,pTgt)
-      LIN pTgt
+    IF WT_CLOSED THEN
+      rLen = PosDist(WT_PT[1].P,WT_PT[2].P)
+      IF rLen > WT_CRATER THEN
+        rF = WT_CRATER / rLen
+        LerpPos(WT_PT[1].P,WT_PT[2].P,rF,pTgt)
+        LIN pTgt
+      ENDIF
+    ELSE
+      rLen = PosDist(WT_PT[WT_NPT - 1].P,WT_PT[WT_NPT].P)
+      IF rLen > WT_CRATER THEN
+        rF = 1.0 - (WT_CRATER / rLen)
+        LerpPos(WT_PT[WT_NPT - 1].P,WT_PT[WT_NPT].P,rF,pTgt)
+        LIN pTgt
+      ENDIF
     ENDIF
   ENDIF
 END
@@ -934,7 +1069,13 @@ DEF SetCornerProc(nP:IN)
   DECL INT nP
   DECL REAL rOri
 
-  rOri = WT_PT[nP].CROT * 6.0
+  ; The point image has no rotation speed. Zero keeps the normal ori rate
+  ; so a corner does not crawl at 1 deg/s.
+  IF WT_PT[nP].CROT < 0.1 THEN
+    rOri = 200.0
+  ELSE
+    rOri = WT_PT[nP].CROT * 6.0
+  ENDIF
   IF rOri < 1.0 THEN
     rOri = 1.0
   ENDIF
