@@ -222,8 +222,8 @@ DEF NeedPage1()
 END
 
 DEF LatchPose(nI:IN)
-  ; E1..E3 and S/T are not in the point image. The positioner and the arm
-  ; configuration are taken from the pose at the moment the points arrive.
+  ; E1, E3 and S/T are not in the point image. E2 is the gantry and is
+  ; overwritten from command 5. Until then it stays at the actual pose.
   DECL INT nI
 
   WT_PT[nI].P.E1 = $AXIS_ACT.E1
@@ -330,6 +330,18 @@ DEF ReadProcess()
       WT_SEG[i].DYN = SG_DYN
       WT_SEG[i].SVALID = TRUE
     ENDFOR
+  ENDIF
+  IF WT_NPT >= 1 THEN
+    WT_PT[1].P.E2 = BitsToReal(WP1_E2)
+  ENDIF
+  IF WT_NPT >= 2 THEN
+    WT_PT[2].P.E2 = BitsToReal(WP2_E2)
+  ENDIF
+  IF WT_NPT >= 3 THEN
+    WT_PT[3].P.E2 = BitsToReal(WP3_E2)
+  ENDIF
+  IF WT_NPT >= 4 THEN
+    WT_PT[4].P.E2 = BitsToReal(WP4_E2)
   ENDIF
   WT_CRATER = BitsToReal(TC_CRATER)
   WT_APPROACH = BitsToReal(TC_APPROACH)

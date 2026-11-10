@@ -1050,10 +1050,11 @@ SIGNAL WELD_START $OUT[2278]
 ; There is no command 4.
 ;
 ; Command 3 is one transfer. Four XYZABC poses are 96 bytes and four
-; corner distances are 16 bytes, which fills the payload. E1..E3 and S/T
-; are not in this image; pc2kuka.src copies them from the actual pose,
-; so the positioner stays where it is. A corner distance is millimetres
-; and is applied on both sides of that vertex.
+; corner distances are 16 bytes, which fills the payload. E1, E3 and S/T
+; are copied from the actual pose. E2 is the gantry that carries the
+; robot base; only E2 moves, and its four endpoint values travel in
+; command 5. A corner distance is millimetres and is applied on both
+; sides of that vertex.
 ;
 ; RS_CLOSED = 0 is an open chain: seams = point count - 1. Four points
 ; are then 3 seams, and the distances on the two end points are ignored.
@@ -1150,7 +1151,9 @@ SIGNAL WC3 $IN[3985]  TO $IN[4016]
 SIGNAL WC4 $IN[4017]  TO $IN[4048]
 
 ; RS_CMD 5  one seam recipe, shared by every seam, plus the task parameters.
-; Assembly-plate seams use this single set. $IN[3313]..$IN[3792] stays spare.
+; Assembly-plate seams use this single set. WPn_E2 is the gantry position
+; at endpoint n. E1 and E3 stay at the actual pose. $IN[3441]..$IN[3792]
+; stays spare.
 ; SPEED mm/s, AMP mm, FREQ Hz. WEAVE 0 off, 1 triangle, 2 sine.
 ; JOB, WIRE, VOLT and DYN are passed through to the welder as raw integers.
 ; CRATER and APPROACH are mm, AIRSPEED is mm/s, the four dynamics are percent.
@@ -1164,7 +1167,12 @@ SIGNAL SG_JOB $IN[3257]  TO $IN[3264]
 SIGNAL SG_WIRE $IN[3265]  TO $IN[3280]
 SIGNAL SG_VOLT $IN[3281]  TO $IN[3296]
 SIGNAL SG_DYN $IN[3297]  TO $IN[3312]
-; $IN[3313]..$IN[3792] spare. One recipe covers every seam.
+; Gantry axis E2 at each endpoint. Linear unit is the axis unit, normally mm.
+SIGNAL WP1_E2 $IN[3313]  TO $IN[3344]
+SIGNAL WP2_E2 $IN[3345]  TO $IN[3376]
+SIGNAL WP3_E2 $IN[3377]  TO $IN[3408]
+SIGNAL WP4_E2 $IN[3409]  TO $IN[3440]
+; $IN[3441]..$IN[3792] spare. One recipe covers every seam.
 SIGNAL TC_CRATER $IN[3793]  TO $IN[3824]
 SIGNAL TC_APPROACH $IN[3825]  TO $IN[3856]
 SIGNAL TC_AIRSPEED $IN[3857]  TO $IN[3888]
