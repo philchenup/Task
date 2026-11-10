@@ -1,0 +1,288 @@
+&ACCESS RVO
+&REL 1
+&COMMENT Robot weld status
+DEF  SPS ( )
+
+  ; Cyclic publisher for RobotGetData, WeldGetData and the robot status that
+  ; RobotGetData does not carry. Also the only writer of the EWM_* welder
+  ; outputs, so that the manual commands from the PC and the requests from
+  ; pc2kuka.src cannot fight over them.
+  ;
+  ; Signal numbers are the $OUT map starting at 3025.
+  ; Low index is LSB. 32-bit signals are IEEE754 binary32.
+  ;
+  ; RG_AXIS_VEL      max |A1..A6| speed, deg/s
+  ; RG_AXIS_ACC      max |A1..A6| accel, deg/s^2
+  ; RG_EXT_AXIS_VEL  max |E1..E3| speed, axis unit/s
+  ; RG_EXT_AXIS_ACC  max |E1..E3| accel, axis unit/s^2
+  ; RG_E1..RG_E3     $AXIS_ACT.E1..E3
+  ; RG_E4..RG_E6     $AXIS_ACT.E4..E6
+  ; RG_SJ1..RG_SJ6   $AXIS_ACT.A1..A6, deg
+  ; RG_X..RG_C       $POS_ACT in the current tool and base
+  ; RG_STATUS_S/T    $POS_ACT.S and .T, the arm configuration
+  ; RG_TCP_VEL       $VEL_ACT in mm/s, the actual path speed
+  ; RG_OV_PRO        $OV_PRO, which scales the programmed weld speed
+  ; RG_MODE_OP       1 T1, 2 T2, 3 AUT, 4 EX
+  ; RG_PRO_STATE     1 free, 2 reset, 3 active, 4 stop, 5 end
+  ; RG_ACT_TOOL/BASE the tool and base the task channel last applied
+  ; RG_HEARTBEAT     frame counter, lets the PC detect a frozen image
+  ; RG_PC_LINK_OK    RS_PC_ALIVE has changed within the last 2 s
+  ;
+  ; WG_ARC_STABILITY       = DI_ArcStability
+  ; WG_PS_READY            = DI_WeldingPSReady
+  ; WG_WELDING_PROCESSING  = DI_ArcStability
+  ; WG_REAL_VOLTAGE        = GI_RealVoltage
+  ; WG_REAL_CURRENT        = GI_RealCurrent
+  ; WG_REAL_WIRE_SPEED     = GI_RealWireSpeed
+  ; WG_WIRE_STICKING, WG_WELD_ERROR, WG_MALFUNCTION, WG_ERR_CODE
+  ;   have no source input in $config.dat and are written FALSE / 0.
+  ;
+  ; This submit uses $TIMER[20] and $TIMER[22]. Do not use those timers in a
+  ; robot program.
+
+  DECL INT i
+  DECL INT iDtMs
+  DECL INT iSample
+  DECL INT iBeat
+  DECL BOOL bLastAlive
+  DECL REAL rDt
+  DECL REAL rAcc
+  DECL REAL rAxisVel
+  DECL REAL rAxisAcc
+  DECL REAL rExtVel
+  DECL REAL rExtAcc
+  DECL REAL rA[6]
+  DECL REAL rE[3]
+  DECL REAL rV[6]
+  DECL REAL rVE[3]
+  DECL REAL rLastA[6]
+  DECL REAL rLastE[3]
+  DECL REAL rLastV[6]
+  DECL REAL rLastVE[3]
+
+  ;FOLD INIT
+  $TIMER_STOP[20] = FALSE
+  $TIMER[20] = 0
+  $TIMER_STOP[22] = FALSE
+  $TIMER[22] = 0
+  bLastAlive = RS_PC_ALIVE
+  iSample = 0
+  iBeat = 0
+  rAxisVel = 0.0
+  rAxisAcc = 0.0
+  rExtVel = 0.0
+  rExtAcc = 0.0
+  FOR i = 1 TO 6
+    rLastA[i] = 0.0
+    rLastV[i] = 0.0
+  ENDFOR
+  FOR i = 1 TO 3
+    rLastE[i] = 0.0
+    rLastVE[i] = 0.0
+  ENDFOR
+  ;ENDFOLD (INIT)
+
+  LOOP
+    WAIT FOR NOT($POWER_FAIL)
+    TORQUE_MONITORING()
+
+    ;FOLD USER PLC
+    rA[1] = $AXIS_ACT.A1
+    rA[2] = $AXIS_ACT.A2
+    rA[3] = $AXIS_ACT.A3
+    rA[4] = $AXIS_ACT.A4
+    rA[5] = $AXIS_ACT.A5
+    rA[6] = $AXIS_ACT.A6
+    rE[1] = $AXIS_ACT.E1
+    rE[2] = $AXIS_ACT.E2
+    rE[3] = $AXIS_ACT.E3
+
+    iDtMs = $TIMER[20]
+    IF iDtMs >= 1 THEN
+      $TIMER[20] = 0
+      IF (iSample < 1) OR (iDtMs > 200) THEN
+        FOR i = 1 TO 6
+          rLastA[i] = rA[i]
+          rLastV[i] = 0.0
+        ENDFOR
+        FOR i = 1 TO 3
+          rLastE[i] = rE[i]
+          rLastVE[i] = 0.0
+        ENDFOR
+        rAxisVel = 0.0
+        rAxisAcc = 0.0
+        rExtVel = 0.0
+        rExtAcc = 0.0
+        iSample = 1
+      ELSE
+        rDt = iDtMs / 1000.0
+        rAxisVel = 0.0
+        rAxisAcc = 0.0
+        FOR i = 1 TO 6
+          rV[i] = (rA[i] - rLastA[i]) / rDt
+          IF iSample >= 2 THEN
+            rAcc = (rV[i] - rLastV[i]) / rDt
+            IF ABS(rAcc) > rAxisAcc THEN
+              rAxisAcc = ABS(rAcc)
+            ENDIF
+          ENDIF
+          IF ABS(rV[i]) > rAxisVel THEN
+            rAxisVel = ABS(rV[i])
+          ENDIF
+          rLastA[i] = rA[i]
+          rLastV[i] = rV[i]
+        ENDFOR
+        rExtVel = 0.0
+        rExtAcc = 0.0
+        FOR i = 1 TO 3
+          rVE[i] = (rE[i] - rLastE[i]) / rDt
+          IF iSample >= 2 THEN
+            rAcc = (rVE[i] - rLastVE[i]) / rDt
+            IF ABS(rAcc) > rExtAcc THEN
+              rExtAcc = ABS(rAcc)
+            ENDIF
+          ENDIF
+          IF ABS(rVE[i]) > rExtVel THEN
+            rExtVel = ABS(rVE[i])
+          ENDIF
+          rLastE[i] = rE[i]
+          rLastVE[i] = rVE[i]
+        ENDFOR
+        IF iSample < 2 THEN
+          rAxisAcc = 0.0
+          rExtAcc = 0.0
+          iSample = 2
+        ENDIF
+      ENDIF
+    ENDIF
+
+    RG_AXIS_VEL = RealToBits(rAxisVel)
+    RG_AXIS_ACC = RealToBits(rAxisAcc)
+    RG_EXT_AXIS_VEL = RealToBits(rExtVel)
+    RG_EXT_AXIS_ACC = RealToBits(rExtAcc)
+
+    RG_E1 = RealToBits(rE[1])
+    RG_E2 = RealToBits(rE[2])
+    RG_E3 = RealToBits(rE[3])
+    RG_E4 = RealToBits($AXIS_ACT.E4)
+    RG_E5 = RealToBits($AXIS_ACT.E5)
+    RG_E6 = RealToBits($AXIS_ACT.E6)
+
+    RG_SJ1 = RealToBits(rA[1])
+    RG_SJ2 = RealToBits(rA[2])
+    RG_SJ3 = RealToBits(rA[3])
+    RG_SJ4 = RealToBits(rA[4])
+    RG_SJ5 = RealToBits(rA[5])
+    RG_SJ6 = RealToBits(rA[6])
+
+    RG_X = RealToBits($POS_ACT.X)
+    RG_Y = RealToBits($POS_ACT.Y)
+    RG_Z = RealToBits($POS_ACT.Z)
+    RG_A = RealToBits($POS_ACT.A)
+    RG_B = RealToBits($POS_ACT.B)
+    RG_C = RealToBits($POS_ACT.C)
+
+    RG_STATUS_S = $POS_ACT.S
+    RG_STATUS_T = $POS_ACT.T
+    RG_TCP_VEL = RealToBits($VEL_ACT * 1000.0)
+    RG_OV_PRO = $OV_PRO
+    RG_ACT_TOOL = WT_TOOL
+    RG_ACT_BASE = WT_BASE
+    RG_APP_ERR = WT_ERR
+
+    SWITCH $MODE_OP
+    CASE #T1
+      RG_MODE_OP = 1
+    CASE #T2
+      RG_MODE_OP = 2
+    CASE #AUT
+      RG_MODE_OP = 3
+    CASE #EX
+      RG_MODE_OP = 4
+    DEFAULT
+      RG_MODE_OP = 0
+    ENDSWITCH
+
+    SWITCH $PRO_STATE1
+    CASE #P_FREE
+      RG_PRO_STATE = 1
+    CASE #P_RESET
+      RG_PRO_STATE = 2
+    CASE #P_ACTIVE
+      RG_PRO_STATE = 3
+    CASE #P_STOP
+      RG_PRO_STATE = 4
+    CASE #P_END
+      RG_PRO_STATE = 5
+    DEFAULT
+      RG_PRO_STATE = 0
+    ENDSWITCH
+
+    RG_DRIVES_ON = $PERI_RDY
+    RG_MOVE_ENABLE = $MOVE_ENABLE
+    RG_STOPMESS = $STOPMESS
+    RG_ROBOT_READY = $PERI_RDY AND $MOVE_ENABLE AND NOT($STOPMESS)
+
+    IF RS_PC_ALIVE <> bLastAlive THEN
+      bLastAlive = RS_PC_ALIVE
+      $TIMER[22] = 0
+    ENDIF
+    RG_PC_LINK_OK = $TIMER[22] < 2000
+
+    iBeat = iBeat + 1
+    IF iBeat > 65535 THEN
+      iBeat = 0
+    ENDIF
+    RG_HEARTBEAT = iBeat
+
+    WG_ARC_STABILITY = DI_ArcStability
+    WG_PS_READY = DI_WeldingPSReady
+    WG_WIRE_STICKING = FALSE
+    WG_WELD_ERROR = FALSE
+    WG_WELDING_PROCESSING = DI_ArcStability
+    WG_MALFUNCTION = FALSE
+    WG_ERR_CODE = 0
+    WG_REAL_VOLTAGE = GI_RealVoltage
+    WG_REAL_CURRENT = GI_RealCurrent
+    WG_REAL_WIRE_SPEED = GI_RealWireSpeed
+
+    ; welder outputs have a single writer. During a task the arc follows
+    ; pc2kuka.src, otherwise the manual commands from the PC pass through.
+    IF TC_TASK_BUSY THEN
+      EWM_EXTERNAL_CTRL_ENABLE = TRUE
+      EWM_WELD_MODE = TRUE
+      EWM_ROBOTOK = TRUE
+      EWM_GAS = WT_GAS_REQ
+      EWM_WELDING = WT_ARC_REQ
+      EWM_WELD_JOB = WT_ACT_JOB
+      EWM_WIRE_SPEED = WT_ACT_WIRE
+      EWM_WELD_PROGRAM = 0
+      EWM_MONITOR = TRUE
+      EWM_WELD_SIMULATION = FALSE
+      EWM_WIRE_FEEDING = FALSE
+      EWM_POS_FIND = FALSE
+      EWM_WIRE_RUN = FALSE
+      EWM_HANDLE_MODE1 = FALSE
+      EWM_HANDLE_MODE2 = FALSE
+    ELSE
+      EWM_EXTERNAL_CTRL_ENABLE = PLC_EWM_EXTERNAL_CTRL
+      EWM_WELD_MODE = PLC_EWM_WELD_MODE
+      EWM_ROBOTOK = PLC_EWM_ROBOTOK
+      EWM_GAS = PLC_EWM_GAS
+      EWM_WELDING = PLC_EWM_WELDING
+      EWM_WELD_JOB = PLC_EWM_WELD_JOB
+      EWM_WIRE_SPEED = PLC_EWM_WIRE_SPEED
+      EWM_WELD_PROGRAM = PLC_EWM_WELD_PROGRAM
+      EWM_MONITOR = PLC_EWM_MONITOR
+      EWM_WELD_SIMULATION = PLC_EWM_WELD_SIMULATION
+      EWM_WIRE_FEEDING = PLC_EWM_WIRE_FEEDING
+      EWM_POS_FIND = PLC_EWM_POS_FIND
+      EWM_WIRE_RUN = PLC_EWM_WIRE_RUN
+      EWM_HANDLE_MODE1 = PLC_EWM_HANDLE_MODE1
+      EWM_HANDLE_MODE2 = PLC_EWM_HANDLE_MODE2
+    ENDIF
+    ;ENDFOLD (USER PLC)
+
+  ENDLOOP
+
+END

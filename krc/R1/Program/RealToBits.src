@@ -1,0 +1,43 @@
+&ACCESS RV
+&REL 1
+DEFFCT INT RealToBits(rVal:IN)
+  ; REAL to IEEE754 binary32 bit pattern, the inverse of BitsToReal
+  DECL REAL rVal
+  DECL REAL rAbs
+  DECL INT nSign
+  DECL INT nExp
+  DECL INT nMant
+  DECL INT nRaw
+
+  nSign = 0
+  rAbs = rVal
+  IF rAbs < 0.0 THEN
+    nSign = 1
+    rAbs = -rAbs
+  ENDIF
+  IF rAbs < Pow2(-126) THEN
+    RETURN 0
+  ENDIF
+  nExp = 127
+  WHILE rAbs >= 2.0
+    rAbs = rAbs / 2.0
+    nExp = nExp + 1
+  ENDWHILE
+  WHILE rAbs < 1.0
+    rAbs = rAbs * 2.0
+    nExp = nExp - 1
+  ENDWHILE
+  IF nExp > 254 THEN
+    nExp = 254
+    rAbs = 1.9999999
+  ENDIF
+  nMant = (rAbs - 1.0) * 8388608.0
+  IF nMant > 8388607 THEN
+    nMant = 8388607
+  ENDIF
+  nRaw = nExp * 8388608 + nMant
+  IF nSign == 1 THEN
+    nRaw = nRaw B_OR (B_NOT 2147483647)
+  ENDIF
+  RETURN nRaw
+ENDFCT
