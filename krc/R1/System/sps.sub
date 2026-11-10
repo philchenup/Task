@@ -84,7 +84,10 @@ DEF  SPS ( )
 
   LOOP
     WAIT FOR NOT($POWER_FAIL)
-    TORQUE_MONITORING()
+    ; Torque monitoring is not installed on this controller. $config.dat only
+    ; keeps the old TM_SUGG_T and TQM_TQDAT_T structures, so
+    ; TORQUE_MONITORING() is not a function. The KUKA template call is left
+    ; out: an unknown name stops this submit before any output is written.
 
     ;FOLD USER PLC
     rA[1] = $AXIS_ACT.A1
