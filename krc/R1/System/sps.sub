@@ -5,8 +5,8 @@ DEF  SPS ( )
 
   ; Cyclic publisher for RobotGetData, WeldGetData and the robot status that
   ; RobotGetData does not carry. Also the only writer of the EWM_* welder
-  ; outputs, so that the manual commands from the PC and the requests from
-  ; pc2kuka.src cannot fight over them.
+  ; outputs. While a seam is busy the arc follows pc2kuka.src. Otherwise the
+  ; live WS_* image at $IN[3953] is copied through. PLC_EWM_* is not read.
   ;
   ; Signal numbers are the $OUT map starting at 3025.
   ; Low index is LSB. 32-bit signals are IEEE754 binary32.
@@ -246,8 +246,10 @@ DEF  SPS ( )
     WG_REAL_CURRENT = GI_RealCurrent
     WG_REAL_WIRE_SPEED = GI_RealWireSpeed
 
-    ; welder outputs have a single writer. During a task the arc follows
-    ; pc2kuka.src, otherwise the manual commands from the PC pass through.
+    ; welder outputs have a single writer. During a seam the arc follows
+    ; the values latched from WS_* by pc2kuka.src. Otherwise the live WS_*
+    ; image is passed through. Gun clear, error ack, spot, send-wire,
+    ; supper, lift-arc, voltage and dynamics have no EWM_* output.
     IF TC_TASK_BUSY THEN
       EWM_EXTERNAL_CTRL_ENABLE = TRUE
       EWM_WELD_MODE = TRUE
@@ -256,7 +258,7 @@ DEF  SPS ( )
       EWM_WELDING = WT_ARC_REQ
       EWM_WELD_JOB = WT_ACT_JOB
       EWM_WIRE_SPEED = WT_ACT_WIRE
-      EWM_WELD_PROGRAM = 0
+      EWM_WELD_PROGRAM = (WT_ACT_PROG B_AND 15)
       EWM_MONITOR = TRUE
       EWM_WELD_SIMULATION = FALSE
       EWM_WIRE_FEEDING = FALSE
@@ -265,21 +267,29 @@ DEF  SPS ( )
       EWM_HANDLE_MODE1 = FALSE
       EWM_HANDLE_MODE2 = FALSE
     ELSE
-      EWM_EXTERNAL_CTRL_ENABLE = PLC_EWM_EXTERNAL_CTRL
-      EWM_WELD_MODE = PLC_EWM_WELD_MODE
-      EWM_ROBOTOK = PLC_EWM_ROBOTOK
-      EWM_GAS = PLC_EWM_GAS
-      EWM_WELDING = PLC_EWM_WELDING
-      EWM_WELD_JOB = PLC_EWM_WELD_JOB
-      EWM_WIRE_SPEED = PLC_EWM_WIRE_SPEED
-      EWM_WELD_PROGRAM = PLC_EWM_WELD_PROGRAM
-      EWM_MONITOR = PLC_EWM_MONITOR
-      EWM_WELD_SIMULATION = PLC_EWM_WELD_SIMULATION
-      EWM_WIRE_FEEDING = PLC_EWM_WIRE_FEEDING
-      EWM_POS_FIND = PLC_EWM_POS_FIND
-      EWM_WIRE_RUN = PLC_EWM_WIRE_RUN
-      EWM_HANDLE_MODE1 = PLC_EWM_HANDLE_MODE1
-      EWM_HANDLE_MODE2 = PLC_EWM_HANDLE_MODE2
+      EWM_EXTERNAL_CTRL_ENABLE = WS_EXT_CTRL_ENABLE
+      EWM_WELD_MODE = WS_WELD_MODE
+      EWM_ROBOTOK = WS_ROBOT_READY
+      EWM_GAS = WS_GAS_READY
+      EWM_WELDING = WS_ARC_START
+      EWM_WELD_JOB = WS_JOB_NUMBER
+      EWM_WIRE_SPEED = WS_WIRE_SPEED_CORR
+      EWM_WELD_PROGRAM = (WS_PRO_NUMBER B_AND 15)
+      EWM_MONITOR = WS_MACHINE_SWITCH
+      EWM_WELD_SIMULATION = WS_SIMULATION
+      EWM_WIRE_FEEDING = WS_TEST_INCHING
+      EWM_POS_FIND = WS_POS_SEARCH
+      EWM_WIRE_RUN = WS_WIRE_BACK
+      IF (WS_OPERATOR_MODE B_AND 1) <> 0 THEN
+        EWM_HANDLE_MODE1 = TRUE
+      ELSE
+        EWM_HANDLE_MODE1 = FALSE
+      ENDIF
+      IF (WS_OPERATOR_MODE B_AND 2) <> 0 THEN
+        EWM_HANDLE_MODE2 = TRUE
+      ELSE
+        EWM_HANDLE_MODE2 = FALSE
+      ENDIF
     ENDIF
     ;ENDFOLD (USER PLC)
 
