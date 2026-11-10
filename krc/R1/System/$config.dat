@@ -1043,17 +1043,17 @@ SIGNAL WELD_START $OUT[2278]
 ;
 ;   RS_CMD 1  realtime joint     one A1..A6 E1..E3 target and dynamics
 ;   RS_CMD 2  joint trajectory   same bits as command 1, one waypoint
-;   RS_CMD 3  weld points        4 endpoints X..C and 4 corner distances
-;   RS_CMD 4  Cartesian stream   X..C E1..E3 S T, path speed, acc, ori
-;   RS_CMD 5  weld process       up to 4 seam processes and task params
+;   RS_CMD 3  weld points        4 endpoints, each X Y Z A B C E2
+;   RS_CMD 5  weld process       one shared seam recipe, 4 corner distances, task params
 ;   RS_CMD 6  execute the latched weld
 ;   RS_CMD 7  clear the weld buffer
+; There is no command 4.
 ;
-; Command 3 is one transfer. Four XYZABC poses are 96 bytes and four
-; corner distances are 16 bytes, which fills the payload. E1..E3 and S/T
-; are not in this image; pc2kuka.src copies them from the actual pose,
-; so the positioner stays where it is. A corner distance is millimetres
-; and is applied on both sides of that vertex.
+; Command 3 is one transfer. Each endpoint is X Y Z A B C and the gantry
+; E2, 28 bytes, so four endpoints fill the 112 byte payload. E1 and E3
+; are not sent. pc2kuka.src copies them from the actual pose. The corner
+; distances travel in command 5. A corner distance is millimetres and is
+; applied on both sides of that vertex.
 ;
 ; RS_CLOSED = 0 is an open chain: seams = point count - 1. Four points
 ; are then 3 seams, and the distances on the two end points are ignored.
@@ -1062,8 +1062,7 @@ SIGNAL WELD_START $OUT[2278]
 ; point 1. A closed chain needs at least 3 points.
 ;
 ; Command 2 is the joint-waypoint stream. Command 1 is the single live
-; joint target. Both read RJ_*. Command 4 keeps the Cartesian stream
-; that used to be command 2.
+; joint target. Both read RJ_*.
 ;
 ; The PC writes the whole 128 bytes in one transfer and flips RS_TOGGLE
 ; in that same transfer. The robot latches on the edge. RS_CONT requests
@@ -1117,95 +1116,61 @@ SIGNAL RJ_AXIS_ACC $IN[3473]  TO $IN[3504]
 SIGNAL RJ_EXT_SPEED $IN[3505]  TO $IN[3536]
 SIGNAL RJ_EXT_ACC $IN[3537]  TO $IN[3568]
 
-; RS_CMD 4  Cartesian stream, overlaying the joint image.
-; RT_SPEED is mm/s, RT_ACC is m/s^2, RT_ORI is deg/s.
-; S and T are the arm configuration and must be copied from RG_STATUS_S / T.
-SIGNAL RT_X $IN[3153]  TO $IN[3184]
-SIGNAL RT_Y $IN[3185]  TO $IN[3216]
-SIGNAL RT_Z $IN[3217]  TO $IN[3248]
-SIGNAL RT_A $IN[3249]  TO $IN[3280]
-SIGNAL RT_B $IN[3281]  TO $IN[3312]
-SIGNAL RT_C $IN[3313]  TO $IN[3344]
-SIGNAL RT_E1 $IN[3345]  TO $IN[3376]
-SIGNAL RT_E2 $IN[3377]  TO $IN[3408]
-SIGNAL RT_E3 $IN[3409]  TO $IN[3440]
-SIGNAL RT_S $IN[3441]  TO $IN[3448]
-SIGNAL RT_T $IN[3449]  TO $IN[3456]
-SIGNAL RT_SPEED $IN[3473]  TO $IN[3504]
-SIGNAL RT_ACC $IN[3505]  TO $IN[3536]
-SIGNAL RT_ORI $IN[3537]  TO $IN[3568]
-
-; RS_CMD 3  four endpoints and one corner distance per endpoint.
+; RS_CMD 3  four endpoints. Each one is X Y Z A B C then gantry E2.
 ; Coordinates are mm and deg in the selected base and tool.
-; WCn is the corner distance at point n, in mm.
+; E2 is the linear axis that carries the robot base, normally mm.
+; E1 and E3 are not in this image.
 SIGNAL WP1_X $IN[3153]  TO $IN[3184]
 SIGNAL WP1_Y $IN[3185]  TO $IN[3216]
 SIGNAL WP1_Z $IN[3217]  TO $IN[3248]
 SIGNAL WP1_A $IN[3249]  TO $IN[3280]
 SIGNAL WP1_B $IN[3281]  TO $IN[3312]
 SIGNAL WP1_C $IN[3313]  TO $IN[3344]
-SIGNAL WP2_X $IN[3345]  TO $IN[3376]
-SIGNAL WP2_Y $IN[3377]  TO $IN[3408]
-SIGNAL WP2_Z $IN[3409]  TO $IN[3440]
-SIGNAL WP2_A $IN[3441]  TO $IN[3472]
-SIGNAL WP2_B $IN[3473]  TO $IN[3504]
-SIGNAL WP2_C $IN[3505]  TO $IN[3536]
-SIGNAL WP3_X $IN[3537]  TO $IN[3568]
-SIGNAL WP3_Y $IN[3569]  TO $IN[3600]
-SIGNAL WP3_Z $IN[3601]  TO $IN[3632]
-SIGNAL WP3_A $IN[3633]  TO $IN[3664]
-SIGNAL WP3_B $IN[3665]  TO $IN[3696]
-SIGNAL WP3_C $IN[3697]  TO $IN[3728]
-SIGNAL WP4_X $IN[3729]  TO $IN[3760]
-SIGNAL WP4_Y $IN[3761]  TO $IN[3792]
-SIGNAL WP4_Z $IN[3793]  TO $IN[3824]
-SIGNAL WP4_A $IN[3825]  TO $IN[3856]
-SIGNAL WP4_B $IN[3857]  TO $IN[3888]
-SIGNAL WP4_C $IN[3889]  TO $IN[3920]
-; Corner distances, mm. Open chain uses WC2 and WC3. Closed uses all four.
-SIGNAL WC1 $IN[3921]  TO $IN[3952]
-SIGNAL WC2 $IN[3953]  TO $IN[3984]
-SIGNAL WC3 $IN[3985]  TO $IN[4016]
-SIGNAL WC4 $IN[4017]  TO $IN[4048]
+SIGNAL WP1_E2 $IN[3345]  TO $IN[3376]
+SIGNAL WP2_X $IN[3377]  TO $IN[3408]
+SIGNAL WP2_Y $IN[3409]  TO $IN[3440]
+SIGNAL WP2_Z $IN[3441]  TO $IN[3472]
+SIGNAL WP2_A $IN[3473]  TO $IN[3504]
+SIGNAL WP2_B $IN[3505]  TO $IN[3536]
+SIGNAL WP2_C $IN[3537]  TO $IN[3568]
+SIGNAL WP2_E2 $IN[3569]  TO $IN[3600]
+SIGNAL WP3_X $IN[3601]  TO $IN[3632]
+SIGNAL WP3_Y $IN[3633]  TO $IN[3664]
+SIGNAL WP3_Z $IN[3665]  TO $IN[3696]
+SIGNAL WP3_A $IN[3697]  TO $IN[3728]
+SIGNAL WP3_B $IN[3729]  TO $IN[3760]
+SIGNAL WP3_C $IN[3761]  TO $IN[3792]
+SIGNAL WP3_E2 $IN[3793]  TO $IN[3824]
+SIGNAL WP4_X $IN[3825]  TO $IN[3856]
+SIGNAL WP4_Y $IN[3857]  TO $IN[3888]
+SIGNAL WP4_Z $IN[3889]  TO $IN[3920]
+SIGNAL WP4_A $IN[3921]  TO $IN[3952]
+SIGNAL WP4_B $IN[3953]  TO $IN[3984]
+SIGNAL WP4_C $IN[3985]  TO $IN[4016]
+SIGNAL WP4_E2 $IN[4017]  TO $IN[4048]
 
-; RS_CMD 5  up to 4 seam processes and the task parameters.
+; RS_CMD 5  one seam recipe, shared by every seam, plus the task parameters.
+; Assembly-plate seams use this single set. WCn is the corner distance at
+; point n, in mm. $IN[3441]..$IN[3792] stays spare.
 ; SPEED mm/s, AMP mm, FREQ Hz. WEAVE 0 off, 1 triangle, 2 sine.
 ; JOB, WIRE, VOLT and DYN are passed through to the welder as raw integers.
 ; CRATER and APPROACH are mm, AIRSPEED is mm/s, the four dynamics are percent.
 ; TC_SAMPLES is the number of interpolated points per weave period.
 ; 0 selects the default, 4 for a triangle and 8 for a sine.
-SIGNAL SG1_SPEED $IN[3153]  TO $IN[3184]
-SIGNAL SG1_AMP $IN[3185]  TO $IN[3216]
-SIGNAL SG1_FREQ $IN[3217]  TO $IN[3248]
-SIGNAL SG1_WEAVE $IN[3249]  TO $IN[3256]
-SIGNAL SG1_JOB $IN[3257]  TO $IN[3264]
-SIGNAL SG1_WIRE $IN[3265]  TO $IN[3280]
-SIGNAL SG1_VOLT $IN[3281]  TO $IN[3296]
-SIGNAL SG1_DYN $IN[3297]  TO $IN[3312]
-SIGNAL SG2_SPEED $IN[3313]  TO $IN[3344]
-SIGNAL SG2_AMP $IN[3345]  TO $IN[3376]
-SIGNAL SG2_FREQ $IN[3377]  TO $IN[3408]
-SIGNAL SG2_WEAVE $IN[3409]  TO $IN[3416]
-SIGNAL SG2_JOB $IN[3417]  TO $IN[3424]
-SIGNAL SG2_WIRE $IN[3425]  TO $IN[3440]
-SIGNAL SG2_VOLT $IN[3441]  TO $IN[3456]
-SIGNAL SG2_DYN $IN[3457]  TO $IN[3472]
-SIGNAL SG3_SPEED $IN[3473]  TO $IN[3504]
-SIGNAL SG3_AMP $IN[3505]  TO $IN[3536]
-SIGNAL SG3_FREQ $IN[3537]  TO $IN[3568]
-SIGNAL SG3_WEAVE $IN[3569]  TO $IN[3576]
-SIGNAL SG3_JOB $IN[3577]  TO $IN[3584]
-SIGNAL SG3_WIRE $IN[3585]  TO $IN[3600]
-SIGNAL SG3_VOLT $IN[3601]  TO $IN[3616]
-SIGNAL SG3_DYN $IN[3617]  TO $IN[3632]
-SIGNAL SG4_SPEED $IN[3633]  TO $IN[3664]
-SIGNAL SG4_AMP $IN[3665]  TO $IN[3696]
-SIGNAL SG4_FREQ $IN[3697]  TO $IN[3728]
-SIGNAL SG4_WEAVE $IN[3729]  TO $IN[3736]
-SIGNAL SG4_JOB $IN[3737]  TO $IN[3744]
-SIGNAL SG4_WIRE $IN[3745]  TO $IN[3760]
-SIGNAL SG4_VOLT $IN[3761]  TO $IN[3776]
-SIGNAL SG4_DYN $IN[3777]  TO $IN[3792]
+SIGNAL SG_SPEED $IN[3153]  TO $IN[3184]
+SIGNAL SG_AMP $IN[3185]  TO $IN[3216]
+SIGNAL SG_FREQ $IN[3217]  TO $IN[3248]
+SIGNAL SG_WEAVE $IN[3249]  TO $IN[3256]
+SIGNAL SG_JOB $IN[3257]  TO $IN[3264]
+SIGNAL SG_WIRE $IN[3265]  TO $IN[3280]
+SIGNAL SG_VOLT $IN[3281]  TO $IN[3296]
+SIGNAL SG_DYN $IN[3297]  TO $IN[3312]
+; Corner distances, mm. Open chain uses WC2 and WC3. Closed uses all four.
+SIGNAL WC1 $IN[3313]  TO $IN[3344]
+SIGNAL WC2 $IN[3345]  TO $IN[3376]
+SIGNAL WC3 $IN[3377]  TO $IN[3408]
+SIGNAL WC4 $IN[3409]  TO $IN[3440]
+; $IN[3441]..$IN[3792] spare. One recipe covers every seam.
 SIGNAL TC_CRATER $IN[3793]  TO $IN[3824]
 SIGNAL TC_APPROACH $IN[3825]  TO $IN[3856]
 SIGNAL TC_AIRSPEED $IN[3857]  TO $IN[3888]
@@ -1319,7 +1284,7 @@ SIGNAL TC_PROGRESS $OUT[4017]  TO $OUT[4032]
 ; cannot see its local variables and because sps.sub is another interpreter.
 ; WT_PT holds 4 endpoints. WT_SEG holds up to 4 seams. Open chain uses
 ; pointCount-1 of them. RS_CLOSED uses pointCount, and the last seam
-; returns to point 1.
+; returns to point 1. Every seam is given the same process recipe.
 
 DECL WELD_PT_T WT_PT[4]
 DECL WELD_SEG_T WT_SEG[4]

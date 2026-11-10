@@ -59,6 +59,7 @@ namespace {
         setBits(send, bit + 96, 32, floatToU32(p.a));
         setBits(send, bit + 128, 32, floatToU32(p.b));
         setBits(send, bit + 160, 32, floatToU32(p.c));
+        setBits(send, bit + 192, 32, floatToU32(p.e2));
     }
     void writeSegment(uint8_t* send, size_t bit, const WeldSegment& s)
     {
@@ -303,52 +304,36 @@ void ProfinetComm::slotSendJointTrajectory(const KukaHeader& head, const JointCo
     commitImage(buf);
 }
 
-void ProfinetComm::slotSendTrajectory(const KukaHeader& head, const TrajectoryCommand& cmd)
-{
-    if (QThread::currentThread() != thread()) {
-        QMetaObject::invokeMethod(this, [this, head, cmd]() { slotSendTrajectory(head, cmd); }, Qt::QueuedConnection);
-        return;
-    }
-    KukaHeader h = prepare(head);
-    h.cmd = KukaCmdTrajectory;
-    uint8_t buf[kKukaImageBytes] = {};
-    MakeSendTrajectory(buf, sizeof(buf), h, cmd);
-    commitImage(buf);
-}
-
 void ProfinetComm::slotSendWeldPoints(const KukaHeader& head,
-    const WeldPoint& p1, const WeldPoint& p2, const WeldPoint& p3, const WeldPoint& p4,
-    float corner1Mm, float corner2Mm, float corner3Mm, float corner4Mm)
+    const WeldPoint& p1, const WeldPoint& p2, const WeldPoint& p3, const WeldPoint& p4)
 {
     if (QThread::currentThread() != thread()) {
-        QMetaObject::invokeMethod(this, [this, head, p1, p2, p3, p4,
-            corner1Mm, corner2Mm, corner3Mm, corner4Mm]() {
-            slotSendWeldPoints(head, p1, p2, p3, p4, corner1Mm, corner2Mm, corner3Mm, corner4Mm);
+        QMetaObject::invokeMethod(this, [this, head, p1, p2, p3, p4]() {
+            slotSendWeldPoints(head, p1, p2, p3, p4);
         }, Qt::QueuedConnection);
         return;
     }
     KukaHeader h = prepare(head);
     h.cmd = KukaCmdWeldPoints;
     uint8_t buf[kKukaImageBytes] = {};
-    MakeSendWeldPoints(buf, sizeof(buf), h, p1, p2, p3, p4,
-        corner1Mm, corner2Mm, corner3Mm, corner4Mm);
+    MakeSendWeldPoints(buf, sizeof(buf), h, p1, p2, p3, p4);
     commitImage(buf);
 }
 
 void ProfinetComm::slotSendWeldProcess(const KukaHeader& head,
-    const WeldSegment& seg1, const WeldSegment& seg2, const WeldSegment& seg3,
-    const WeldSegment& seg4, const WeldTaskParams& params)
+    const WeldSegment& seg, const WeldTaskParams& params,
+    float corner1Mm, float corner2Mm, float corner3Mm, float corner4Mm)
 {
     if (QThread::currentThread() != thread()) {
-        QMetaObject::invokeMethod(this, [this, head, seg1, seg2, seg3, seg4, params]() {
-            slotSendWeldProcess(head, seg1, seg2, seg3, seg4, params);
+        QMetaObject::invokeMethod(this, [this, head, seg, params, corner1Mm, corner2Mm, corner3Mm, corner4Mm]() {
+            slotSendWeldProcess(head, seg, params, corner1Mm, corner2Mm, corner3Mm, corner4Mm);
         }, Qt::QueuedConnection);
         return;
     }
     KukaHeader h = prepare(head);
     h.cmd = KukaCmdWeldProcess;
     uint8_t buf[kKukaImageBytes] = {};
-    MakeSendWeldProcess(buf, sizeof(buf), h, seg1, seg2, seg3, seg4, params);
+    MakeSendWeldProcess(buf, sizeof(buf), h, seg, params, corner1Mm, corner2Mm, corner3Mm, corner4Mm);
     commitImage(buf);
 }
 
@@ -562,58 +547,32 @@ void ProfinetComm::MakeSendJoint(uint8_t* send, size_t len, const KukaHeader& he
     setBits(send, 512, 32, floatToU32(cmd.extAcc));
 }
 
-void ProfinetComm::MakeSendTrajectory(uint8_t* send, size_t len, const KukaHeader& head, const TrajectoryCommand& cmd)
-{
-    if (!send || len < kKukaImageBytes)
-        return;
-    std::memset(send, 0, len);
-    MakeSendHeader(send, head);
-    setBits(send, 128, 32, floatToU32(cmd.x));
-    setBits(send, 160, 32, floatToU32(cmd.y));
-    setBits(send, 192, 32, floatToU32(cmd.z));
-    setBits(send, 224, 32, floatToU32(cmd.a));
-    setBits(send, 256, 32, floatToU32(cmd.b));
-    setBits(send, 288, 32, floatToU32(cmd.c));
-    setBits(send, 320, 32, floatToU32(cmd.e1));
-    setBits(send, 352, 32, floatToU32(cmd.e2));
-    setBits(send, 384, 32, floatToU32(cmd.e3));
-    setBits(send, 416, 8, cmd.s);
-    setBits(send, 424, 8, cmd.t);
-    setBits(send, 448, 32, floatToU32(cmd.speed));
-    setBits(send, 480, 32, floatToU32(cmd.acc));
-    setBits(send, 512, 32, floatToU32(cmd.ori));
-}
-
 void ProfinetComm::MakeSendWeldPoints(uint8_t* send, size_t len, const KukaHeader& head,
-    const WeldPoint& p1, const WeldPoint& p2, const WeldPoint& p3, const WeldPoint& p4,
-    float corner1Mm, float corner2Mm, float corner3Mm, float corner4Mm)
+    const WeldPoint& p1, const WeldPoint& p2, const WeldPoint& p3, const WeldPoint& p4)
 {
     if (!send || len < kKukaImageBytes)
         return;
     std::memset(send, 0, len);
     MakeSendHeader(send, head);
     writeXyzAbc(send, 128, p1);
-    writeXyzAbc(send, 320, p2);
-    writeXyzAbc(send, 512, p3);
-    writeXyzAbc(send, 704, p4);
-    setBits(send, 896, 32, floatToU32(corner1Mm));
-    setBits(send, 928, 32, floatToU32(corner2Mm));
-    setBits(send, 960, 32, floatToU32(corner3Mm));
-    setBits(send, 992, 32, floatToU32(corner4Mm));
+    writeXyzAbc(send, 352, p2);
+    writeXyzAbc(send, 576, p3);
+    writeXyzAbc(send, 800, p4);
 }
 
 void ProfinetComm::MakeSendWeldProcess(uint8_t* send, size_t len, const KukaHeader& head,
-    const WeldSegment& seg1, const WeldSegment& seg2, const WeldSegment& seg3,
-    const WeldSegment& seg4, const WeldTaskParams& params)
+    const WeldSegment& seg, const WeldTaskParams& params,
+    float corner1Mm, float corner2Mm, float corner3Mm, float corner4Mm)
 {
     if (!send || len < kKukaImageBytes)
         return;
     std::memset(send, 0, len);
     MakeSendHeader(send, head);
-    writeSegment(send, 128, seg1);
-    writeSegment(send, 288, seg2);
-    writeSegment(send, 448, seg3);
-    writeSegment(send, 608, seg4);
+    writeSegment(send, 128, seg);
+    setBits(send, 288, 32, floatToU32(corner1Mm));
+    setBits(send, 320, 32, floatToU32(corner2Mm));
+    setBits(send, 352, 32, floatToU32(corner3Mm));
+    setBits(send, 384, 32, floatToU32(corner4Mm));
     setBits(send, 768, 32, floatToU32(params.craterMm));
     setBits(send, 800, 32, floatToU32(params.approachMm));
     setBits(send, 832, 32, floatToU32(params.airSpeedMmS));

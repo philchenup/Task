@@ -26,25 +26,25 @@ class QTimer;
 // RS_CMD
 //   1 realtime joint target
 //   2 joint trajectory, one waypoint per toggle, same bytes as command 1
-//   3 four weld endpoints and four corner distances
-//   4 Cartesian stream
-//   5 up to four seam processes and the task parameters
+//   3 four weld endpoints, each X Y Z A B C and gantry E2
+//   5 one seam recipe shared by every seam, four corner distances, and the task parameters
 //   6 execute
 //   7 clear
 //
-// Command 3 fills the 112 byte payload: point i is XYZABC at bit
-// 128 + i * 192, and corner i is one REAL millimetre distance at bit
-// 896 + i * 32. E1..E3 and S/T are not transmitted. The controller copies
-// them from the actual pose, so the positioner stays put.
+// Command 3 fills the 112 byte payload. Point i starts at bit 128 + i * 224
+// and is X Y Z A B C E2, seven REAL values. E2 is the gantry that carries
+// the robot base. E1 and E3 are not transmitted. The controller copies them
+// from the actual pose.
 // KukaHeader::closed == false: seams = pointCount - 1, so 4 points are 3
 // seams and the distances on the two ends are ignored.
 // KukaHeader::closed == true: seams = pointCount. Four points are then 4
 // head-to-tail seams, and the last seam runs from point 4 back to point 1.
 // A closed chain needs at least 3 points.
 //
-// Command 5: segment i is 20 bytes at bit 128 + i * 160. The task
-// parameters follow at bit 768. Send command 3, then command 5, then
-// command 6, all with the same task id.
+// Command 5: one 20 byte recipe at bit 128. The controller copies it onto
+// every seam. Corner distances are four REAL millimetre values at bit 288.
+// Bits 416..767 are spare. The task parameters follow at bit 768. Send
+// command 3, then command 5, then command 6, with one task id.
 //
 // Welder commands are not in this image. WeldSendData is written to the
 // PLC_EWM_* block at $IN[2001], byte offset 250, 40 bytes through $IN[2320].
@@ -60,7 +60,6 @@ enum KukaCmd : uint8_t {
     KukaCmdJoint = 1,
     KukaCmdJointTraj = 2,
     KukaCmdWeldPoints = 3,
-    KukaCmdTrajectory = 4,
     KukaCmdWeldProcess = 5,
     KukaCmdWeldExecute = 6,
     KukaCmdWeldClear = 7
@@ -218,22 +217,13 @@ struct JointCommand
     float extAcc = 100.f;
 };
 
-struct TrajectoryCommand
-{
-    float x = 0.f, y = 0.f, z = 0.f, a = 0.f, b = 0.f, c = 0.f;
-    float e1 = 0.f, e2 = 0.f, e3 = 0.f;
-    uint8_t s = 0;
-    uint8_t t = 0;
-    float speed = 50.f; // mm/s
-    float acc = 2.3f;   // m/s^2
-    float ori = 200.f;  // deg/s
-};
-
-// XYZABC only. Four of these plus four corner distances fill the image.
-// The controller latches E1..E3, S and T from the actual pose.
+// One weld endpoint. Command 3 sends x..c and e2 together. e2 is the gantry
+// that carries the arm base. The controller fills E1 and E3 from the actual
+// pose; the host does not send them.
 struct WeldPoint
 {
     float x = 0.f, y = 0.f, z = 0.f, a = 0.f, b = 0.f, c = 0.f;
+    float e2 = 0.f;
 };
 
 struct WeldSegment
@@ -317,15 +307,15 @@ public:
 
     void MakeSendHeader(uint8_t* send, const KukaHeader& head);
     void MakeSendJoint(uint8_t* send, size_t len, const KukaHeader& head, const JointCommand& cmd);
-    void MakeSendTrajectory(uint8_t* send, size_t len, const KukaHeader& head, const TrajectoryCommand& cmd);
-    // cornerNMm is the symmetric corner distance at point N, in mm.
-    // An open chain ignores the distances on the first and last used points.
+    // Each point is X Y Z A B C E2. E1 and E3 are not written.
     void MakeSendWeldPoints(uint8_t* send, size_t len, const KukaHeader& head,
-        const WeldPoint& p1, const WeldPoint& p2, const WeldPoint& p3, const WeldPoint& p4,
-        float corner1Mm, float corner2Mm, float corner3Mm, float corner4Mm);
+        const WeldPoint& p1, const WeldPoint& p2, const WeldPoint& p3, const WeldPoint& p4);
+    // One recipe, applied to every seam. cornerNMm is the symmetric corner
+    // distance at point N, in mm. An open chain ignores the distances on
+    // the first and last used points.
     void MakeSendWeldProcess(uint8_t* send, size_t len, const KukaHeader& head,
-        const WeldSegment& seg1, const WeldSegment& seg2, const WeldSegment& seg3,
-        const WeldSegment& seg4, const WeldTaskParams& params);
+        const WeldSegment& seg, const WeldTaskParams& params,
+        float corner1Mm, float corner2Mm, float corner3Mm, float corner4Mm);
     void MakeSendWeldData(uint8_t* send, size_t len, const WeldSendData& in);
 
     void ParseRecvRobotData(const uint8_t* recv, size_t len, RobotGetData& in);
@@ -350,16 +340,13 @@ public slots:
     void slotSendJoint(const KukaHeader& head, const JointCommand& cmd);
     // Command 2. One joint waypoint, packed with the same layout as command 1.
     void slotSendJointTrajectory(const KukaHeader& head, const JointCommand& cmd);
-    // Command 4. Cartesian stream.
-    void slotSendTrajectory(const KukaHeader& head, const TrajectoryCommand& cmd);
-    // Command 3. All four endpoints and the four corner distances at once.
+    // Command 3. Four endpoints, each X Y Z A B C and gantry E2.
     // head.pointCount is 1..4. head.closed selects 4 seams instead of 3.
     void slotSendWeldPoints(const KukaHeader& head,
-        const WeldPoint& p1, const WeldPoint& p2, const WeldPoint& p3, const WeldPoint& p4,
-        float corner1Mm, float corner2Mm, float corner3Mm, float corner4Mm);
+        const WeldPoint& p1, const WeldPoint& p2, const WeldPoint& p3, const WeldPoint& p4);
     void slotSendWeldProcess(const KukaHeader& head,
-        const WeldSegment& seg1, const WeldSegment& seg2, const WeldSegment& seg3,
-        const WeldSegment& seg4, const WeldTaskParams& params);
+        const WeldSegment& seg, const WeldTaskParams& params,
+        float corner1Mm, float corner2Mm, float corner3Mm, float corner4Mm);
     // cmd 7 clears. Any other value executes.
     void slotSendTaskCommand(const KukaHeader& head);
     void slotSendWeldData(const WeldSendData& data);

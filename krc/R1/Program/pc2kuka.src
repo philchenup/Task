@@ -9,15 +9,14 @@ DEF pc2kuka( )
   ;
   ;   1 realtime joint target, A1..A6 E1..E3 and the percent dynamics
   ;   2 joint trajectory, the same bits, one waypoint per edge
-  ;   3 four weld endpoints X..C and four corner distances
-  ;   4 Cartesian stream, X..C E1..E3 S T and the path dynamics
-  ;   5 up to 4 seam processes and the task parameters
+  ;   3 four weld endpoints, each X Y Z A B C and gantry E2
+  ;   5 one seam recipe shared by every seam, four corner distances, and the task parameters
   ;   6 weld the latched chain
   ;   7 clear the buffer
   ;
   ; RS_CLOSED = 0 keeps an open chain, so 4 points are 3 seams. RS_CLOSED = 1
   ; makes seams = points, so 4 points are 4 head-to-tail seams and the last
-  ; seam returns to point 1. Command 5 carries one process per seam. WEAVE 1
+  ; seam returns to point 1. Command 5 carries one recipe for every seam. WEAVE 1
   ; is a triangle and WEAVE 2 is a sine, both interpolated here with LIN.
   ; RS_CONT blends a stream so the arm does not stop on every 50 ms sample.
   ; This is interpreter streaming, not an RSI overlay: the PC waits for
@@ -98,8 +97,6 @@ DEF pc2kuka( )
       JointTrajMove()
     CASE 3
       ReadPoints()
-    CASE 4
-      CartMove()
     CASE 5
       ReadProcess()
     CASE 6
@@ -225,12 +222,11 @@ DEF NeedPage1()
 END
 
 DEF LatchPose(nI:IN)
-  ; E1..E3 and S/T are not in the point image. The positioner and the arm
-  ; configuration are taken from the pose at the moment the points arrive.
+  ; E2 is already loaded with the endpoint. The host does not send E1 or
+  ; E3. Copy those, and the unused external axes, from the actual pose.
   DECL INT nI
 
   WT_PT[nI].P.E1 = $AXIS_ACT.E1
-  WT_PT[nI].P.E2 = $AXIS_ACT.E2
   WT_PT[nI].P.E3 = $AXIS_ACT.E3
   WT_PT[nI].P.E4 = $AXIS_ACT.E4
   WT_PT[nI].P.E5 = $AXIS_ACT.E5
@@ -243,8 +239,6 @@ DEF LatchPose(nI:IN)
 END
 
 DEF ReadPoints()
-  DECL INT nI
-
   NewTask()
   IF WT_ERR <> 0 THEN
     RETURN
@@ -261,8 +255,7 @@ DEF ReadPoints()
     WT_PT[1].P.A = BitsToReal(WP1_A)
     WT_PT[1].P.B = BitsToReal(WP1_B)
     WT_PT[1].P.C = BitsToReal(WP1_C)
-    WT_PT[1].CPRE = BitsToReal(WC1)
-    WT_PT[1].CPOST = WT_PT[1].CPRE
+    WT_PT[1].P.E2 = BitsToReal(WP1_E2)
     LatchPose(1)
   ENDIF
   IF WT_NPT >= 2 THEN
@@ -272,8 +265,7 @@ DEF ReadPoints()
     WT_PT[2].P.A = BitsToReal(WP2_A)
     WT_PT[2].P.B = BitsToReal(WP2_B)
     WT_PT[2].P.C = BitsToReal(WP2_C)
-    WT_PT[2].CPRE = BitsToReal(WC2)
-    WT_PT[2].CPOST = WT_PT[2].CPRE
+    WT_PT[2].P.E2 = BitsToReal(WP2_E2)
     LatchPose(2)
   ENDIF
   IF WT_NPT >= 3 THEN
@@ -283,8 +275,7 @@ DEF ReadPoints()
     WT_PT[3].P.A = BitsToReal(WP3_A)
     WT_PT[3].P.B = BitsToReal(WP3_B)
     WT_PT[3].P.C = BitsToReal(WP3_C)
-    WT_PT[3].CPRE = BitsToReal(WC3)
-    WT_PT[3].CPOST = WT_PT[3].CPRE
+    WT_PT[3].P.E2 = BitsToReal(WP3_E2)
     LatchPose(3)
   ENDIF
   IF WT_NPT >= 4 THEN
@@ -294,18 +285,8 @@ DEF ReadPoints()
     WT_PT[4].P.A = BitsToReal(WP4_A)
     WT_PT[4].P.B = BitsToReal(WP4_B)
     WT_PT[4].P.C = BitsToReal(WP4_C)
-    WT_PT[4].CPRE = BitsToReal(WC4)
-    WT_PT[4].CPOST = WT_PT[4].CPRE
+    WT_PT[4].P.E2 = BitsToReal(WP4_E2)
     LatchPose(4)
-  ENDIF
-
-  ; An open chain has no corner at the first or the last point.
-  IF NOT(WT_CLOSED) THEN
-    WT_PT[1].CPRE = 0.0
-    WT_PT[1].CPOST = 0.0
-    nI = WT_NPT
-    WT_PT[nI].CPRE = 0.0
-    WT_PT[nI].CPOST = 0.0
   ENDIF
 
   TC_PAGE_MASK = TC_PAGE_MASK B_OR 1
@@ -314,53 +295,49 @@ DEF ReadPoints()
 END
 
 DEF ReadProcess()
+  ; Assembly-plate seams share one recipe. Copy it onto each seam.
+  DECL INT i
+
   NeedPage1()
   IF WT_ERR <> 0 THEN
     RETURN
   ENDIF
   IF WT_NSEAM >= 1 THEN
-    WT_SEG[1].SPEED = BitsToReal(SG1_SPEED)
-    WT_SEG[1].AMP = BitsToReal(SG1_AMP)
-    WT_SEG[1].FREQ = BitsToReal(SG1_FREQ)
-    WT_SEG[1].WEAVE = SG1_WEAVE
-    WT_SEG[1].JOB = SG1_JOB
-    WT_SEG[1].WIRE = SG1_WIRE
-    WT_SEG[1].VOLT = SG1_VOLT
-    WT_SEG[1].DYN = SG1_DYN
-    WT_SEG[1].SVALID = TRUE
+    FOR i = 1 TO WT_NSEAM
+      WT_SEG[i].SPEED = BitsToReal(SG_SPEED)
+      WT_SEG[i].AMP = BitsToReal(SG_AMP)
+      WT_SEG[i].FREQ = BitsToReal(SG_FREQ)
+      WT_SEG[i].WEAVE = SG_WEAVE
+      WT_SEG[i].JOB = SG_JOB
+      WT_SEG[i].WIRE = SG_WIRE
+      WT_SEG[i].VOLT = SG_VOLT
+      WT_SEG[i].DYN = SG_DYN
+      WT_SEG[i].SVALID = TRUE
+    ENDFOR
   ENDIF
-  IF WT_NSEAM >= 2 THEN
-    WT_SEG[2].SPEED = BitsToReal(SG2_SPEED)
-    WT_SEG[2].AMP = BitsToReal(SG2_AMP)
-    WT_SEG[2].FREQ = BitsToReal(SG2_FREQ)
-    WT_SEG[2].WEAVE = SG2_WEAVE
-    WT_SEG[2].JOB = SG2_JOB
-    WT_SEG[2].WIRE = SG2_WIRE
-    WT_SEG[2].VOLT = SG2_VOLT
-    WT_SEG[2].DYN = SG2_DYN
-    WT_SEG[2].SVALID = TRUE
+  IF WT_NPT >= 1 THEN
+    WT_PT[1].CPRE = BitsToReal(WC1)
+    WT_PT[1].CPOST = WT_PT[1].CPRE
   ENDIF
-  IF WT_NSEAM >= 3 THEN
-    WT_SEG[3].SPEED = BitsToReal(SG3_SPEED)
-    WT_SEG[3].AMP = BitsToReal(SG3_AMP)
-    WT_SEG[3].FREQ = BitsToReal(SG3_FREQ)
-    WT_SEG[3].WEAVE = SG3_WEAVE
-    WT_SEG[3].JOB = SG3_JOB
-    WT_SEG[3].WIRE = SG3_WIRE
-    WT_SEG[3].VOLT = SG3_VOLT
-    WT_SEG[3].DYN = SG3_DYN
-    WT_SEG[3].SVALID = TRUE
+  IF WT_NPT >= 2 THEN
+    WT_PT[2].CPRE = BitsToReal(WC2)
+    WT_PT[2].CPOST = WT_PT[2].CPRE
   ENDIF
-  IF WT_NSEAM >= 4 THEN
-    WT_SEG[4].SPEED = BitsToReal(SG4_SPEED)
-    WT_SEG[4].AMP = BitsToReal(SG4_AMP)
-    WT_SEG[4].FREQ = BitsToReal(SG4_FREQ)
-    WT_SEG[4].WEAVE = SG4_WEAVE
-    WT_SEG[4].JOB = SG4_JOB
-    WT_SEG[4].WIRE = SG4_WIRE
-    WT_SEG[4].VOLT = SG4_VOLT
-    WT_SEG[4].DYN = SG4_DYN
-    WT_SEG[4].SVALID = TRUE
+  IF WT_NPT >= 3 THEN
+    WT_PT[3].CPRE = BitsToReal(WC3)
+    WT_PT[3].CPOST = WT_PT[3].CPRE
+  ENDIF
+  IF WT_NPT >= 4 THEN
+    WT_PT[4].CPRE = BitsToReal(WC4)
+    WT_PT[4].CPOST = WT_PT[4].CPRE
+  ENDIF
+  ; An open chain has no corner at the first or the last point.
+  IF NOT(WT_CLOSED) THEN
+    WT_PT[1].CPRE = 0.0
+    WT_PT[1].CPOST = 0.0
+    i = WT_NPT
+    WT_PT[i].CPRE = 0.0
+    WT_PT[i].CPOST = 0.0
   ENDIF
   WT_CRATER = BitsToReal(TC_CRATER)
   WT_APPROACH = BitsToReal(TC_APPROACH)
@@ -448,52 +425,6 @@ DEF JointTarget(nBlend:IN)
   ELSE
     $APO.CPTP = 0
     PTP aTgt
-  ENDIF
-  NoteStream()
-END
-
-DEF CartMove()
-  DECL E6POS pTgt
-  DECL REAL rBlend
-
-  RequireEnable()
-  IF WT_ERR <> 0 THEN
-    RETURN
-  ENDIF
-  ApplyFrame()
-  IF WT_ERR <> 0 THEN
-    RETURN
-  ENDIF
-  SetCartDyn()
-  pTgt = $POS_ACT
-  pTgt.X = BitsToReal(RT_X)
-  pTgt.Y = BitsToReal(RT_Y)
-  pTgt.Z = BitsToReal(RT_Z)
-  pTgt.A = BitsToReal(RT_A)
-  pTgt.B = BitsToReal(RT_B)
-  pTgt.C = BitsToReal(RT_C)
-  pTgt.E1 = BitsToReal(RT_E1)
-  pTgt.E2 = BitsToReal(RT_E2)
-  pTgt.E3 = BitsToReal(RT_E3)
-  pTgt.E4 = $AXIS_ACT.E4
-  pTgt.E5 = $AXIS_ACT.E5
-  pTgt.E6 = $AXIS_ACT.E6
-  pTgt.S = RT_S
-  pTgt.T = RT_T
-  IF RS_CONT THEN
-    ; about one 50 ms sample of travel, so consecutive targets blend
-    rBlend = BitsToReal(RT_SPEED) * 0.05
-    IF rBlend < 1.0 THEN
-      rBlend = 1.0
-    ENDIF
-    IF rBlend > 50.0 THEN
-      rBlend = 50.0
-    ENDIF
-    $APO.CDIS = rBlend
-    LIN pTgt C_DIS
-  ELSE
-    $APO.CDIS = 0.0
-    LIN pTgt
   ENDIF
   NoteStream()
 END
@@ -996,32 +927,6 @@ DEF SetStoredPtp()
     RedAccExAx[2] = WT_EXACC
     RedAccExAx[3] = WT_EXACC
   ENDIF
-END
-
-DEF SetCartDyn()
-  DECL REAL rV
-
-  rV = BitsToReal(RT_SPEED) / 1000.0
-  IF rV < 0.001 THEN
-    rV = 0.05
-  ENDIF
-  IF rV > 2.0 THEN
-    rV = 2.0
-  ENDIF
-  $VEL.CP = rV
-  rV = BitsToReal(RT_ACC)
-  IF (rV < 0.05) OR (rV > 10.0) THEN
-    rV = 2.3
-  ENDIF
-  $ACC.CP = rV
-  rV = BitsToReal(RT_ORI)
-  IF (rV < 1.0) OR (rV > 400.0) THEN
-    rV = 200.0
-  ENDIF
-  $VEL.ORI1 = rV
-  $VEL.ORI2 = rV
-  $ACC.ORI1 = 100.0
-  $ACC.ORI2 = 100.0
 END
 
 DEF SetAirSpeed()
