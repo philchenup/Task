@@ -14,56 +14,56 @@
 
 class QTimer;
 
-// KUKA $IN/$OUT[3025..4048] is one 128 byte image in each direction.
-// Byte 0 of that image is signal 3025. When byte 0 of the cifX process
-// image is $IN[1] / $OUT[1], the byte offset is (3025 - 1) / 8 = 378.
+// KUKA inputs are $IN[3025]..$IN[4232], 151 bytes. Each seam pose includes
+// E1..E3, which moved the welder block past 4047. Outputs stay
+// $OUT[3025]..$OUT[4047] in a 128 byte image. Byte 0 is signal 3025.
+// When byte 0 of the cifX process image is $IN[1] / $OUT[1], the byte
+// offset is (3025 - 1) / 8 = 378.
 //
-// The PC writes one command per transfer and flips KukaHeader::toggle in
-// that same transfer. KUKA latches on the edge and echoes it in TaskAck.
-// Wait for TaskAck::toggle to match before sending the next sample when
-// every sample has to be executed.
+// Signals do not overlap. The PC writes one motion command per transfer
+// and flips KukaHeader::toggle in that same transfer. KUKA latches motion
+// on the edge and echoes it in TaskAck. Wait for TaskAck::toggle to match
+// before sending the next sample when every sample has to be executed.
+// TaskAck::frameNo echoes KukaHeader::pointIndex.
 //
 // RS_CMD
-//   1 realtime joint target
-//   2 joint trajectory, one waypoint per toggle, same bytes as command 1
-//   3 four weld endpoints and four corner distances
-//   4 Cartesian stream
-//   5 up to four seam processes and the task parameters
-//   6 execute
-//   7 clear
+//   1 realtime joint target, RJ_A1..A6 and RJ_E1..E3
+//   2 joint trajectory, one planned waypoint per toggle, same RJ_* bytes
+//   3 one weld seam: start, end, two tool-Y tilts, weave
+//   4 execute the latched seam
+//   5 clear
 //
-// Command 3 fills the 112 byte payload: point i is XYZABC at bit
-// 128 + i * 192, and corner i is one REAL millimetre distance at bit
-// 896 + i * 32. E1..E3 and S/T are not transmitted. The controller copies
-// them from the actual pose, so the positioner stays put.
-// KukaHeader::closed == false: seams = pointCount - 1, so 4 points are 3
-// seams and the distances on the two ends are ignored.
-// KukaHeader::closed == true: seams = pointCount. Four points are then 4
-// head-to-tail seams, and the last seam runs from point 4 back to point 1.
-// A closed chain needs at least 3 points.
+// There is no Cartesian stream. Command 2 is the host's joint plan.
+// pointIndex is 1..pointTotal. cont blends every waypoint except the last
+// (pointIndex >= pointTotal). pointTotal 0 leaves the stream open.
+// The host fills e1..e3 on joint commands and on both seam endpoints.
+// S, T and E4..E6 of a seam still come from the actual pose.
 //
-// Command 5: segment i is 20 bytes at bit 128 + i * 160. The task
-// parameters follow at bit 768. Send command 3, then command 5, then
-// command 6, all with the same task id.
+// Command 3 layout, bit 0 = $IN[3025]:
+//   start XYZABC E1 E2 E3 at bit 384, end at bit 672, 9 floats each
+//   start tilt, end tilt, speed, amplitude, frequency at bit 960
+//   weave is header byte 8 (bit 64): 0 off, 1 triangle, 2 sine
+// Send command 3, then command 4, with the same task id.
 //
-// Welder commands are not in this image. WeldSendData is written to the
-// PLC_EWM_* block at $IN[2001], byte offset 250, 40 bytes through $IN[2320].
+// Welder commands are WS_* at byte 140 of this image ($IN[4145], 11 bytes).
+// They are not selected by RS_CMD. Every motion transfer keeps the last
+// WeldSendData slice, and slotSendWeldData updates that slice alone.
 
-constexpr uint32_t kKukaImageBytes = 128;
+constexpr uint32_t kKukaCommandBytes = 151;
+constexpr uint32_t kKukaStatusBytes = 128;
+constexpr uint32_t kKukaImageBytes = kKukaCommandBytes;
 constexpr uint32_t kKukaCommandOffset = 378;
 constexpr uint32_t kKukaStatusOffset = 378;
-constexpr uint32_t kKukaWeldCmdOffset = 250;
-constexpr uint32_t kKukaWeldCmdBytes = 40;
+constexpr uint32_t kKukaWeldSliceOffset = 140;
+constexpr uint32_t kKukaWeldSliceBytes = 11;
 
 enum KukaCmd : uint8_t {
     KukaCmdNone = 0,
     KukaCmdJoint = 1,
     KukaCmdJointTraj = 2,
-    KukaCmdWeldPoints = 3,
-    KukaCmdTrajectory = 4,
-    KukaCmdWeldProcess = 5,
-    KukaCmdWeldExecute = 6,
-    KukaCmdWeldClear = 7
+    KukaCmdWeldSeam = 3,
+    KukaCmdWeldExecute = 4,
+    KukaCmdWeldClear = 5
 };
 
 enum KukaWeave : uint8_t {
@@ -81,9 +81,9 @@ enum KukaTaskState : uint8_t {
     KukaTaskError = 5
 };
 
-// 1 point count, 2 page missing, 3 tool or base, 4 arc timeout,
-// 5 aborted, 6 unknown command, 7 corner does not fit, 8 enable off,
-// 9 weave type
+// 1 bad seam, 2 seam missing or task id mismatch, 3 tool or base,
+// 4 arc timeout, 5 aborted, 6 unknown command, 7 unused,
+// 8 enable off, 9 weave type
 enum KukaTaskError : uint8_t {
     KukaErrNone = 0,
     KukaErrPointCount = 1,
@@ -164,7 +164,7 @@ Q_DECLARE_METATYPE(KukaStatus)
 struct TaskAck
 {
     uint8_t cmd = 0;
-    uint8_t pageMask = 0;  // bit0 weld points, bit1 process
+    uint8_t pageMask = 0;  // bit0 seam latched
     uint8_t taskState = 0;
     uint8_t errCode = 0;
     uint16_t taskId = 0;
@@ -173,7 +173,7 @@ struct TaskAck
     bool toggle = false;
     bool busy = false;
     bool arcOn = false;
-    uint16_t frameNo = 0;
+    uint16_t frameNo = 0;  // echoes RS_POINT_INDEX
     uint16_t progress = 0; // 0..10000
 };
 Q_DECLARE_METATYPE(TaskAck)
@@ -200,69 +200,48 @@ struct KukaHeader
     bool goHome = false;
     bool abort = false;
     bool toggle = false;
-    bool cont = false;     // approximate the stream instead of stopping
-    bool arcTrack = false; // reserved, latched with the task
+    bool cont = false;      // approximate the stream instead of stopping
     uint16_t taskId = 0;
-    uint8_t pointCount = 0; // 1..4, or 3..4 when closed
-    bool closed = false;    // bit 56, RS_CLOSED. 4 points then make 4 seams
-    uint16_t frameNo = 0;
+    uint8_t pointIndex = 0; // trajectory waypoint, 1..pointTotal
+    uint8_t pointTotal = 0; // 0 = the plan has no marked end
+    uint8_t weave = KukaWeaveOff;
 };
 
 struct JointCommand
 {
     float a1 = 0.f, a2 = 0.f, a3 = 0.f, a4 = 0.f, a5 = 0.f, a6 = 0.f;
     float e1 = 0.f, e2 = 0.f, e3 = 0.f;
-    float axisSpeed = 30.f; // percent
+    float axisSpeed = 30.f; // percent, 1..100, also scales E1..E3
     float axisAcc = 50.f;
-    float extSpeed = 100.f;
-    float extAcc = 100.f;
 };
 
-struct TrajectoryCommand
-{
-    float x = 0.f, y = 0.f, z = 0.f, a = 0.f, b = 0.f, c = 0.f;
-    float e1 = 0.f, e2 = 0.f, e3 = 0.f;
-    uint8_t s = 0;
-    uint8_t t = 0;
-    float speed = 50.f; // mm/s
-    float acc = 2.3f;   // m/s^2
-    float ori = 200.f;  // deg/s
-};
-
-// XYZABC only. Four of these plus four corner distances fill the image.
-// The controller latches E1..E3, S and T from the actual pose.
+// XYZABC plus E1..E3 in the selected base and tool. S, T and E4..E6 are
+// latched from the actual pose when the seam is stored.
 struct WeldPoint
 {
     float x = 0.f, y = 0.f, z = 0.f, a = 0.f, b = 0.f, c = 0.f;
+    float e1 = 0.f, e2 = 0.f, e3 = 0.f;
 };
 
-struct WeldSegment
+// One seam. Tilts are degrees about tool Y. 0 skips that orientation move.
+// speed / amp / freq are mm/s, mm and Hz. Job, wire, voltage and dynamics
+// are not in this struct: they are latched from the live WeldSendData.
+struct WeldSeam
 {
-    float speedMmS = 0.f;
+    WeldPoint start;
+    WeldPoint end;
+    float startTiltDeg = 0.f;
+    float endTiltDeg = 0.f;
+    float speedMmS = 10.f;
     float ampMm = 0.f;
     float freqHz = 0.f;
     uint8_t weave = KukaWeaveOff;
-    uint8_t job = 0;
-    uint16_t wire = 0; // raw welder integers, not IEEE754
-    uint16_t volt = 0;
-    uint16_t dyn = 0;
 };
 
-struct WeldTaskParams
-{
-    float craterMm = 0.f;
-    float approachMm = 50.f;
-    float airSpeedMmS = 500.f;
-    float axisSpeedPct = 30.f;
-    float axisAccPct = 50.f;
-    float extSpeedPct = 100.f;
-    float extAccPct = 100.f;
-    uint8_t samples = 0; // 0 -> 4 for a triangle, 8 for a sine
-};
-
-// Manual welder commands. Packed onto PLC_EWM_* at $IN[2001], not into the
-// 3025 image. weld_pro_number keeps its low 4 bits, which is the width of
-// PLC_EWM_WELD_PROGRAM. The corrections are raw 16 bit values.
+// Welder command packed at byte 140 of the 3025 image ($IN[4145]).
+// The corrections are raw integers, not IEEE754. The program output on
+// the controller is 4 bits, so only the low 4 bits of weld_pro_number
+// reach EWM_WELD_PROGRAM.
 struct WeldSendData
 {
     bool weld_mode;
@@ -299,7 +278,7 @@ struct ProfinetIoLayout
 {
     uint32_t area = 0;
     uint32_t commandOffset = kKukaCommandOffset;
-    uint32_t weldCmdOffset = kKukaWeldCmdOffset;
+    uint32_t weldCmdOffset = 0; // unused; WS_* is inside the 3025 image
     uint32_t statusOffset = kKukaStatusOffset;
     uint32_t timeoutMs = 10;
     int cycleMs = 50;
@@ -317,15 +296,9 @@ public:
 
     void MakeSendHeader(uint8_t* send, const KukaHeader& head);
     void MakeSendJoint(uint8_t* send, size_t len, const KukaHeader& head, const JointCommand& cmd);
-    void MakeSendTrajectory(uint8_t* send, size_t len, const KukaHeader& head, const TrajectoryCommand& cmd);
-    // cornerNMm is the symmetric corner distance at point N, in mm.
-    // An open chain ignores the distances on the first and last used points.
-    void MakeSendWeldPoints(uint8_t* send, size_t len, const KukaHeader& head,
-        const WeldPoint& p1, const WeldPoint& p2, const WeldPoint& p3, const WeldPoint& p4,
-        float corner1Mm, float corner2Mm, float corner3Mm, float corner4Mm);
-    void MakeSendWeldProcess(uint8_t* send, size_t len, const KukaHeader& head,
-        const WeldSegment& seg1, const WeldSegment& seg2, const WeldSegment& seg3,
-        const WeldSegment& seg4, const WeldTaskParams& params);
+    // Writes the seam and copies seam.weave into the header byte.
+    void MakeSendWeldSeam(uint8_t* send, size_t len, const KukaHeader& head, const WeldSeam& seam);
+    // Writes the 11 byte WS_* slice. Bit 0 of send is WS_WELD_MODE.
     void MakeSendWeldData(uint8_t* send, size_t len, const WeldSendData& in);
 
     void ParseRecvRobotData(const uint8_t* recv, size_t len, RobotGetData& in);
@@ -348,19 +321,12 @@ public slots:
     void stopIoCycle();
 
     void slotSendJoint(const KukaHeader& head, const JointCommand& cmd);
-    // Command 2. One joint waypoint, packed with the same layout as command 1.
+    // Command 2. One joint waypoint of the planned trajectory.
+    // head.pointIndex / pointTotal mark the last point, which is not blended.
     void slotSendJointTrajectory(const KukaHeader& head, const JointCommand& cmd);
-    // Command 4. Cartesian stream.
-    void slotSendTrajectory(const KukaHeader& head, const TrajectoryCommand& cmd);
-    // Command 3. All four endpoints and the four corner distances at once.
-    // head.pointCount is 1..4. head.closed selects 4 seams instead of 3.
-    void slotSendWeldPoints(const KukaHeader& head,
-        const WeldPoint& p1, const WeldPoint& p2, const WeldPoint& p3, const WeldPoint& p4,
-        float corner1Mm, float corner2Mm, float corner3Mm, float corner4Mm);
-    void slotSendWeldProcess(const KukaHeader& head,
-        const WeldSegment& seg1, const WeldSegment& seg2, const WeldSegment& seg3,
-        const WeldSegment& seg4, const WeldTaskParams& params);
-    // cmd 7 clears. Any other value executes.
+    // Command 3. Start, end, both deflection angles and the weave.
+    void slotSendWeldSeam(const KukaHeader& head, const WeldSeam& seam);
+    // cmd 5 clears. Any other value executes the latched seam.
     void slotSendTaskCommand(const KukaHeader& head);
     void slotSendWeldData(const WeldSendData& data);
 
@@ -393,9 +359,8 @@ private:
 
     ProfinetIoLayout m_layout;
     uint8_t m_image[kKukaImageBytes] = {};
-    uint8_t m_weldImage[kKukaWeldCmdBytes] = {};
+    uint8_t m_weldSlice[kKukaWeldSliceBytes] = {};
     bool m_imageValid = false;
-    bool m_weldValid = false;
     bool m_alive = false;
     bool m_lastToggle = false;
 

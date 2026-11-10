@@ -51,7 +51,7 @@ namespace {
         return value;
     }
 
-    void writeXyzAbc(uint8_t* send, size_t bit, const WeldPoint& p)
+    void writePose(uint8_t* send, size_t bit, const WeldPoint& p)
     {
         setBits(send, bit + 0, 32, floatToU32(p.x));
         setBits(send, bit + 32, 32, floatToU32(p.y));
@@ -59,17 +59,17 @@ namespace {
         setBits(send, bit + 96, 32, floatToU32(p.a));
         setBits(send, bit + 128, 32, floatToU32(p.b));
         setBits(send, bit + 160, 32, floatToU32(p.c));
+        setBits(send, bit + 192, 32, floatToU32(p.e1));
+        setBits(send, bit + 224, 32, floatToU32(p.e2));
+        setBits(send, bit + 256, 32, floatToU32(p.e3));
     }
-    void writeSegment(uint8_t* send, size_t bit, const WeldSegment& s)
+    uint8_t percent(float value)
     {
-        setBits(send, bit + 0, 32, floatToU32(s.speedMmS));
-        setBits(send, bit + 32, 32, floatToU32(s.ampMm));
-        setBits(send, bit + 64, 32, floatToU32(s.freqHz));
-        setBits(send, bit + 96, 8, s.weave);
-        setBits(send, bit + 104, 8, s.job);
-        setBits(send, bit + 112, 16, s.wire);
-        setBits(send, bit + 128, 16, s.volt);
-        setBits(send, bit + 144, 16, s.dyn);
+        if (value < 0.f)
+            return 0;
+        if (value > 100.f)
+            return 100;
+        return static_cast<uint8_t>(value + 0.5f);
     }
 }
 
@@ -267,9 +267,12 @@ KukaHeader ProfinetComm::prepare(KukaHeader head)
 
 void ProfinetComm::commitImage(const uint8_t* image)
 {
+    uint8_t buf[kKukaImageBytes];
+    std::memcpy(buf, image, kKukaImageBytes);
+    std::memcpy(buf + kKukaWeldSliceOffset, m_weldSlice, kKukaWeldSliceBytes);
     {
         QMutexLocker lock(&m_cacheMutex);
-        std::memcpy(m_image, image, kKukaImageBytes);
+        std::memcpy(m_image, buf, kKukaImageBytes);
         m_imageValid = true;
     }
     writeCachedOutputs();
@@ -303,52 +306,19 @@ void ProfinetComm::slotSendJointTrajectory(const KukaHeader& head, const JointCo
     commitImage(buf);
 }
 
-void ProfinetComm::slotSendTrajectory(const KukaHeader& head, const TrajectoryCommand& cmd)
+void ProfinetComm::slotSendWeldSeam(const KukaHeader& head, const WeldSeam& seam)
 {
     if (QThread::currentThread() != thread()) {
-        QMetaObject::invokeMethod(this, [this, head, cmd]() { slotSendTrajectory(head, cmd); }, Qt::QueuedConnection);
-        return;
-    }
-    KukaHeader h = prepare(head);
-    h.cmd = KukaCmdTrajectory;
-    uint8_t buf[kKukaImageBytes] = {};
-    MakeSendTrajectory(buf, sizeof(buf), h, cmd);
-    commitImage(buf);
-}
-
-void ProfinetComm::slotSendWeldPoints(const KukaHeader& head,
-    const WeldPoint& p1, const WeldPoint& p2, const WeldPoint& p3, const WeldPoint& p4,
-    float corner1Mm, float corner2Mm, float corner3Mm, float corner4Mm)
-{
-    if (QThread::currentThread() != thread()) {
-        QMetaObject::invokeMethod(this, [this, head, p1, p2, p3, p4,
-            corner1Mm, corner2Mm, corner3Mm, corner4Mm]() {
-            slotSendWeldPoints(head, p1, p2, p3, p4, corner1Mm, corner2Mm, corner3Mm, corner4Mm);
+        QMetaObject::invokeMethod(this, [this, head, seam]() {
+            slotSendWeldSeam(head, seam);
         }, Qt::QueuedConnection);
         return;
     }
     KukaHeader h = prepare(head);
-    h.cmd = KukaCmdWeldPoints;
+    h.cmd = KukaCmdWeldSeam;
+    h.weave = seam.weave;
     uint8_t buf[kKukaImageBytes] = {};
-    MakeSendWeldPoints(buf, sizeof(buf), h, p1, p2, p3, p4,
-        corner1Mm, corner2Mm, corner3Mm, corner4Mm);
-    commitImage(buf);
-}
-
-void ProfinetComm::slotSendWeldProcess(const KukaHeader& head,
-    const WeldSegment& seg1, const WeldSegment& seg2, const WeldSegment& seg3,
-    const WeldSegment& seg4, const WeldTaskParams& params)
-{
-    if (QThread::currentThread() != thread()) {
-        QMetaObject::invokeMethod(this, [this, head, seg1, seg2, seg3, seg4, params]() {
-            slotSendWeldProcess(head, seg1, seg2, seg3, seg4, params);
-        }, Qt::QueuedConnection);
-        return;
-    }
-    KukaHeader h = prepare(head);
-    h.cmd = KukaCmdWeldProcess;
-    uint8_t buf[kKukaImageBytes] = {};
-    MakeSendWeldProcess(buf, sizeof(buf), h, seg1, seg2, seg3, seg4, params);
+    MakeSendWeldSeam(buf, sizeof(buf), h, seam);
     commitImage(buf);
 }
 
@@ -372,12 +342,17 @@ void ProfinetComm::slotSendWeldData(const WeldSendData& data)
         QMetaObject::invokeMethod(this, [this, data]() { slotSendWeldData(data); }, Qt::QueuedConnection);
         return;
     }
-    uint8_t buf[kKukaWeldCmdBytes] = {};
-    MakeSendWeldData(buf, sizeof(buf), data);
+    uint8_t slice[kKukaWeldSliceBytes] = {};
+    MakeSendWeldData(slice, sizeof(slice), data);
+    std::memcpy(m_weldSlice, slice, kKukaWeldSliceBytes);
+    if (!m_imageValid) {
+        uint8_t buf[kKukaImageBytes] = {};
+        commitImage(buf);
+        return;
+    }
     {
         QMutexLocker lock(&m_cacheMutex);
-        std::memcpy(m_weldImage, buf, kKukaWeldCmdBytes);
-        m_weldValid = true;
+        std::memcpy(m_image + kKukaWeldSliceOffset, m_weldSlice, kKukaWeldSliceBytes);
     }
     writeCachedOutputs();
 }
@@ -385,31 +360,22 @@ void ProfinetComm::slotSendWeldData(const WeldSendData& data)
 void ProfinetComm::writeCachedOutputs()
 {
     uint8_t image[kKukaImageBytes];
-    uint8_t weld[kKukaWeldCmdBytes];
     bool hasImage = false;
-    bool hasWeld = false;
     uint32_t area = 0;
     uint32_t commandOff = 0;
-    uint32_t weldOff = 0;
     uint32_t timeoutMs = 10;
     {
         QMutexLocker lock(&m_cacheMutex);
         hasImage = m_imageValid;
-        hasWeld = m_weldValid;
         if (hasImage)
             std::memcpy(image, m_image, kKukaImageBytes);
-        if (hasWeld)
-            std::memcpy(weld, m_weldImage, kKukaWeldCmdBytes);
         area = m_layout.area;
         commandOff = m_layout.commandOffset;
-        weldOff = m_layout.weldCmdOffset;
         timeoutMs = m_layout.timeoutMs;
     }
 
     if (hasImage)
         cifxTransfer(true, area, commandOff, kKukaImageBytes, image, timeoutMs, true);
-    if (hasWeld)
-        cifxTransfer(true, area, weldOff, kKukaWeldCmdBytes, weld, timeoutMs, true);
 }
 
 void ProfinetComm::readInputs()
@@ -424,8 +390,8 @@ void ProfinetComm::readInputs()
         timeoutMs = m_layout.timeoutMs;
     }
 
-    uint8_t buf[kKukaImageBytes] = {};
-    if (!cifxTransfer(false, area, statusOff, kKukaImageBytes, buf, timeoutMs, true))
+    uint8_t buf[kKukaStatusBytes] = {};
+    if (!cifxTransfer(false, area, statusOff, kKukaStatusBytes, buf, timeoutMs, true))
         return;
 
     KukaFeedback feedback{};
@@ -534,11 +500,10 @@ void ProfinetComm::MakeSendHeader(uint8_t* send, const KukaHeader& head)
     setBit(send, 28, head.abort);
     setBit(send, 29, head.toggle);
     setBit(send, 30, head.cont);
-    setBit(send, 31, head.arcTrack);
     setBits(send, 32, 16, head.taskId);
-    setBits(send, 48, 8, head.pointCount);
-    setBit(send, 56, head.closed);
-    setBits(send, 64, 16, head.frameNo);
+    setBits(send, 48, 8, head.pointIndex);
+    setBits(send, 56, 8, head.pointTotal);
+    setBits(send, 64, 8, head.weave);
 }
 
 void ProfinetComm::MakeSendJoint(uint8_t* send, size_t len, const KukaHeader& head, const JointCommand& cmd)
@@ -547,113 +512,63 @@ void ProfinetComm::MakeSendJoint(uint8_t* send, size_t len, const KukaHeader& he
         return;
     std::memset(send, 0, len);
     MakeSendHeader(send, head);
-    setBits(send, 128, 32, floatToU32(cmd.a1));
-    setBits(send, 160, 32, floatToU32(cmd.a2));
-    setBits(send, 192, 32, floatToU32(cmd.a3));
-    setBits(send, 224, 32, floatToU32(cmd.a4));
-    setBits(send, 256, 32, floatToU32(cmd.a5));
-    setBits(send, 288, 32, floatToU32(cmd.a6));
-    setBits(send, 320, 32, floatToU32(cmd.e1));
-    setBits(send, 352, 32, floatToU32(cmd.e2));
-    setBits(send, 384, 32, floatToU32(cmd.e3));
-    setBits(send, 416, 32, floatToU32(cmd.axisSpeed));
-    setBits(send, 448, 32, floatToU32(cmd.axisAcc));
-    setBits(send, 480, 32, floatToU32(cmd.extSpeed));
-    setBits(send, 512, 32, floatToU32(cmd.extAcc));
+    setBits(send, 72, 8, percent(cmd.axisSpeed));
+    setBits(send, 80, 8, percent(cmd.axisAcc));
+    setBits(send, 96, 32, floatToU32(cmd.a1));
+    setBits(send, 128, 32, floatToU32(cmd.a2));
+    setBits(send, 160, 32, floatToU32(cmd.a3));
+    setBits(send, 192, 32, floatToU32(cmd.a4));
+    setBits(send, 224, 32, floatToU32(cmd.a5));
+    setBits(send, 256, 32, floatToU32(cmd.a6));
+    setBits(send, 288, 32, floatToU32(cmd.e1));
+    setBits(send, 320, 32, floatToU32(cmd.e2));
+    setBits(send, 352, 32, floatToU32(cmd.e3));
 }
 
-void ProfinetComm::MakeSendTrajectory(uint8_t* send, size_t len, const KukaHeader& head, const TrajectoryCommand& cmd)
+void ProfinetComm::MakeSendWeldSeam(uint8_t* send, size_t len, const KukaHeader& head, const WeldSeam& seam)
 {
     if (!send || len < kKukaImageBytes)
         return;
     std::memset(send, 0, len);
     MakeSendHeader(send, head);
-    setBits(send, 128, 32, floatToU32(cmd.x));
-    setBits(send, 160, 32, floatToU32(cmd.y));
-    setBits(send, 192, 32, floatToU32(cmd.z));
-    setBits(send, 224, 32, floatToU32(cmd.a));
-    setBits(send, 256, 32, floatToU32(cmd.b));
-    setBits(send, 288, 32, floatToU32(cmd.c));
-    setBits(send, 320, 32, floatToU32(cmd.e1));
-    setBits(send, 352, 32, floatToU32(cmd.e2));
-    setBits(send, 384, 32, floatToU32(cmd.e3));
-    setBits(send, 416, 8, cmd.s);
-    setBits(send, 424, 8, cmd.t);
-    setBits(send, 448, 32, floatToU32(cmd.speed));
-    setBits(send, 480, 32, floatToU32(cmd.acc));
-    setBits(send, 512, 32, floatToU32(cmd.ori));
-}
-
-void ProfinetComm::MakeSendWeldPoints(uint8_t* send, size_t len, const KukaHeader& head,
-    const WeldPoint& p1, const WeldPoint& p2, const WeldPoint& p3, const WeldPoint& p4,
-    float corner1Mm, float corner2Mm, float corner3Mm, float corner4Mm)
-{
-    if (!send || len < kKukaImageBytes)
-        return;
-    std::memset(send, 0, len);
-    MakeSendHeader(send, head);
-    writeXyzAbc(send, 128, p1);
-    writeXyzAbc(send, 320, p2);
-    writeXyzAbc(send, 512, p3);
-    writeXyzAbc(send, 704, p4);
-    setBits(send, 896, 32, floatToU32(corner1Mm));
-    setBits(send, 928, 32, floatToU32(corner2Mm));
-    setBits(send, 960, 32, floatToU32(corner3Mm));
-    setBits(send, 992, 32, floatToU32(corner4Mm));
-}
-
-void ProfinetComm::MakeSendWeldProcess(uint8_t* send, size_t len, const KukaHeader& head,
-    const WeldSegment& seg1, const WeldSegment& seg2, const WeldSegment& seg3,
-    const WeldSegment& seg4, const WeldTaskParams& params)
-{
-    if (!send || len < kKukaImageBytes)
-        return;
-    std::memset(send, 0, len);
-    MakeSendHeader(send, head);
-    writeSegment(send, 128, seg1);
-    writeSegment(send, 288, seg2);
-    writeSegment(send, 448, seg3);
-    writeSegment(send, 608, seg4);
-    setBits(send, 768, 32, floatToU32(params.craterMm));
-    setBits(send, 800, 32, floatToU32(params.approachMm));
-    setBits(send, 832, 32, floatToU32(params.airSpeedMmS));
-    setBits(send, 864, 32, floatToU32(params.axisSpeedPct));
-    setBits(send, 896, 32, floatToU32(params.axisAccPct));
-    setBits(send, 928, 32, floatToU32(params.extSpeedPct));
-    setBits(send, 960, 32, floatToU32(params.extAccPct));
-    setBits(send, 992, 8, params.samples);
+    setBits(send, 64, 8, seam.weave);
+    writePose(send, 384, seam.start);
+    writePose(send, 672, seam.end);
+    setBits(send, 960, 32, floatToU32(seam.startTiltDeg));
+    setBits(send, 992, 32, floatToU32(seam.endTiltDeg));
+    setBits(send, 1024, 32, floatToU32(seam.speedMmS));
+    setBits(send, 1056, 32, floatToU32(seam.ampMm));
+    setBits(send, 1088, 32, floatToU32(seam.freqHz));
 }
 
 void ProfinetComm::MakeSendWeldData(uint8_t* send, size_t len, const WeldSendData& in)
 {
-    // Bits are relative to $IN[2001]. The extension at $IN[2273] is bit 272.
-    if (!send || len < kKukaWeldCmdBytes)
+    // Bit 0 is WS_WELD_MODE at $IN[4145], byte 140 of the 3025 image.
+    if (!send || len < kKukaWeldSliceBytes)
         return;
     std::memset(send, 0, len);
-    setBit(send, 0, (in.weld_operator_mode & 0x01u) != 0);
-    setBit(send, 1, (in.weld_operator_mode & 0x02u) != 0);
-    setBit(send, 2, in.weld_mode);
-    setBit(send, 3, in.weld_machine_switch);
-    setBit(send, 4, in.weld_arc_start);
-    setBit(send, 5, in.robot_ready);
-    setBit(send, 6, in.gas_ready);
-    setBit(send, 7, in.test_inching);
-    setBit(send, 8, in.weld_pos_search);
-    setBit(send, 9, in.weld_wire_back);
+    setBit(send, 0, in.weld_mode);
+    setBit(send, 1, in.weld_arc_start);
+    setBit(send, 2, in.robot_ready);
+    setBit(send, 3, in.gas_ready);
+    setBit(send, 4, in.gun_clear);
+    setBit(send, 5, in.test_inching);
+    setBit(send, 6, in.weld_pos_search);
+    setBit(send, 7, in.weld_wire_back);
+    setBit(send, 8, in.weld_machine_switch);
+    setBit(send, 9, in.weld_errack);
     setBit(send, 10, in.extern_control_enable);
     setBit(send, 11, in.weld_simulation);
-    setBits(send, 12, 4, in.weld_pro_number & 0x0Fu);
-    setBits(send, 16, 8, in.weld_job_number);
-    setBits(send, 24, 16, in.weld_wire_speed_corr);
-    setBit(send, 272, in.gun_clear);
-    setBit(send, 273, in.weld_errack);
-    setBit(send, 274, in.weld_spot_mode);
-    setBit(send, 275, in.weld_send_wire_mode);
-    setBit(send, 276, in.weld_supper_mode);
-    setBit(send, 277, in.weld_lift_arc);
-    setBits(send, 280, 8, in.weld_operator_mode);
-    setBits(send, 288, 16, in.weld_arc_volt_corr);
-    setBits(send, 304, 16, in.weld_dynamin_corr);
+    setBit(send, 12, in.weld_spot_mode);
+    setBit(send, 13, in.weld_send_wire_mode);
+    setBit(send, 14, in.weld_supper_mode);
+    setBit(send, 15, in.weld_lift_arc);
+    setBits(send, 16, 8, in.weld_operator_mode);
+    setBits(send, 24, 8, in.weld_pro_number);
+    setBits(send, 32, 8, in.weld_job_number);
+    setBits(send, 40, 16, in.weld_wire_speed_corr);
+    setBits(send, 56, 16, in.weld_arc_volt_corr);
+    setBits(send, 72, 16, in.weld_dynamin_corr);
 }
 
 void ProfinetComm::ParseRecvWeldData(const uint8_t* recv, size_t len, WeldGetData& in)
@@ -699,7 +614,7 @@ void ProfinetComm::ParseRecvRobotData(const uint8_t* recv, size_t len, RobotGetD
 
 void ProfinetComm::ParseRecvImage(const uint8_t* recv, size_t len, KukaFeedback& out)
 {
-    if (!recv || len < kKukaImageBytes)
+    if (!recv || len < kKukaStatusBytes)
         return;
     ParseRecvRobotData(recv, len, out.robot);
     ParseRecvWeldData(recv + 76, len - 76, out.weld);
