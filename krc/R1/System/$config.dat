@@ -1252,12 +1252,9 @@ SIGNAL WG_REAL_WIRE_SPEED $OUT[3679]  TO $OUT[3694]
 ; $OUT[3695]..$OUT[3696] padding, no variable
 
 ; Robot status extension  $OUT[3697]..$OUT[3920]  28 bytes
-; RobotGetData carries pose and derived speed only. Without the fields below
-; the PC cannot reconstruct the arm configuration, cannot tell whether the
-; controller will accept a task, and cannot tell a standing robot from a
-; frozen process image.
-; RG_STATUS_S/T    $POS_ACT.S and .T, needed to pick the same inverse solution
-; RG_TCP_VEL       $VEL_ACT in mm/s, the actual travel speed of the seam
+; sps.sub fills joint angles, external axes and the flags below.
+; RG_X..RG_C, RG_STATUS_S/T and RG_TCP_VEL are held at 0. The submit does
+; not read $POS_ACT or $VEL_ACT.
 ; RG_OV_PRO        program override in percent, it scales the weld speed
 ; RG_MODE_OP       1 T1, 2 T2, 3 AUT, 4 EX
 ; RG_PRO_STATE     1 free, 2 reset, 3 active, 4 stop, 5 end
@@ -1330,7 +1327,6 @@ DECL INT WT_NSEAM=0
 DECL INT WT_NPT=0
 DECL INT WT_TOOL=1
 DECL INT WT_BASE=0
-DECL BOOL WT_FRAME_READY=FALSE
 DECL INT WT_ERR=0
 DECL INT WT_SAMPLES=0
 DECL REAL WT_CRATER=0.0

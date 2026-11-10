@@ -27,9 +27,8 @@ DEF pc2kuka( )
   ; RS_ABORT brakes the motion from any line. This program never writes
   ; EWM_*. It uses $TIMER[21]. sps.sub uses $TIMER[20] and $TIMER[22].
   ;
-  ; Tool 1 and base 0 are applied here, before the loop. BAS() assigns
-  ; $TOOL and $BASE. WT_FRAME_READY then lets sps.sub read $POS_ACT.
-  ; Reading XYZABC before a tool is programmed stops the submit.
+  ; Tool 1 and base 0 are applied here, before the loop, for this
+  ; program's motions. sps.sub does not read the Cartesian pose.
 
   DECL INT nCmd
 
@@ -45,7 +44,6 @@ DEF pc2kuka( )
   WT_BASE = 0
   BAS(#TOOL,WT_TOOL)
   BAS(#BASE,WT_BASE)
-  WT_FRAME_READY = TRUE
   WT_ERR = 0
   WT_SAMPLES = 0
   WT_ARC_TRACK = FALSE
@@ -397,7 +395,6 @@ DEF ApplyFrame()
   WT_BASE = RS_BASE_ID
   BAS(#TOOL,WT_TOOL)
   BAS(#BASE,WT_BASE)
-  WT_FRAME_READY = TRUE
   WT_ERR = 0
 END
 
@@ -600,7 +597,6 @@ DEF TaskExec()
   TC_PROGRESS = 0
   BAS(#TOOL,WT_TOOL)
   BAS(#BASE,WT_BASE)
-  WT_FRAME_READY = TRUE
   SetStoredPtp()
   $APO.CDIS = 0.0
 
