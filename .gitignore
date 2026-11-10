@@ -1,0 +1,8 @@
+build/
+output/
+*.pcd
+*.ply
+*.ppm
+*.png
+*.csv
+!data/**
