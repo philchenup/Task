@@ -97,6 +97,8 @@ enum KukaTaskError : uint8_t {
     KukaErrWeave = 9
 };
 
+// sps.sub publishes joint angles and external axes only.
+// X..C in this struct stay 0, and so do KukaStatus::statusS, statusT and tcpVel.
 struct RobotGetData
 {
     float axis_vel;

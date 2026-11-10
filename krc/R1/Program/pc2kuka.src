@@ -26,6 +26,9 @@ DEF pc2kuka( )
   ; RS_RESET and RS_GOTO_HOME are pulses and are handled before RS_CMD.
   ; RS_ABORT brakes the motion from any line. This program never writes
   ; EWM_*. It uses $TIMER[21]. sps.sub uses $TIMER[20] and $TIMER[22].
+  ;
+  ; Tool 1 and base 0 are applied here, before the loop, for this
+  ; program's motions. sps.sub does not read the Cartesian pose.
 
   DECL INT nCmd
 
@@ -39,6 +42,8 @@ DEF pc2kuka( )
   WT_NPT = 0
   WT_TOOL = 1
   WT_BASE = 0
+  BAS(#TOOL,WT_TOOL)
+  BAS(#BASE,WT_BASE)
   WT_ERR = 0
   WT_SAMPLES = 0
   WT_ARC_TRACK = FALSE
