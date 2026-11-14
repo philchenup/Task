@@ -8,7 +8,7 @@ DEF  SPS ( )
   ; outputs, so that the manual commands from the PC and the requests from
   ; pc2kuka.src cannot fight over them.
   ;
-  ; Signal numbers are the $OUT map starting at 3025.
+  ; OUT robot image $OUT[3025]..$OUT[4048].
   ; Low index is LSB. 32-bit signals are IEEE754 binary32.
   ;
   ; RG_AXIS_VEL      max |A1..A6| speed, deg/s
@@ -175,16 +175,6 @@ DEF  SPS ( )
     RG_SJ5 = RealToBits(rA[5])
     RG_SJ6 = RealToBits(rA[6])
 
-    RG_X = RealToBits($POS_ACT.X)
-    RG_Y = RealToBits($POS_ACT.Y)
-    RG_Z = RealToBits($POS_ACT.Z)
-    RG_A = RealToBits($POS_ACT.A)
-    RG_B = RealToBits($POS_ACT.B)
-    RG_C = RealToBits($POS_ACT.C)
-
-    RG_STATUS_S = $POS_ACT.S
-    RG_STATUS_T = $POS_ACT.T
-    RG_TCP_VEL = RealToBits($VEL_ACT * 1000.0)
     RG_OV_PRO = $OV_PRO
     RG_ACT_TOOL = WT_TOOL
     RG_ACT_BASE = WT_BASE
@@ -237,11 +227,7 @@ DEF  SPS ( )
 
     WG_ARC_STABILITY = DI_ArcStability
     WG_PS_READY = DI_WeldingPSReady
-    WG_WIRE_STICKING = FALSE
-    WG_WELD_ERROR = FALSE
     WG_WELDING_PROCESSING = DI_ArcStability
-    WG_MALFUNCTION = FALSE
-    WG_ERR_CODE = 0
     WG_REAL_VOLTAGE = GI_RealVoltage
     WG_REAL_CURRENT = GI_RealCurrent
     WG_REAL_WIRE_SPEED = GI_RealWireSpeed
