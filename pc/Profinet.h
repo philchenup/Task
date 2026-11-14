@@ -14,9 +14,9 @@
 
 class QTimer;
 
-// KUKA $IN/$OUT[3024..4048]: 128-byte process image (cifX byte offset 377).
-// Byte 0 of the image is $IN[3024] / $OUT[3024]; bit packing in this file is
-// relative to that first signal.
+// KUKA block is labeled $IN/$OUT[3024..4048]. $IN[3024] is one pad bit so that
+// the 128-byte process image is byte-aligned at $IN[3025] (bit 0 of byte offset
+// 378). ProfinetComm packs bits relative to $IN[3025] (local bit 0 = RS_CMD).
 // The PC toggles KukaHeader::toggle on each command; KUKA latches on the edge
 // and echoes it in TaskAck::toggle.
 //
@@ -33,8 +33,9 @@ class QTimer;
 // Welder manual I/O: WeldSendData at $IN[2001], cifX offset 250, 40 bytes.
 
 constexpr uint32_t kKukaImageBytes = 128;
-constexpr uint32_t kKukaSignalBase = 3024;
-constexpr uint32_t kKukaCommandOffset = (kKukaSignalBase - 1) / 8; // 377
+constexpr uint32_t kKukaSignalBase = 3024;   // first signal in $config.dat block
+constexpr uint32_t kKukaImageBase = 3025;    // first byte-aligned data bit (RS_CMD)
+constexpr uint32_t kKukaCommandOffset = (kKukaImageBase - 1) / 8; // 378
 constexpr uint32_t kKukaStatusOffset = kKukaCommandOffset;
 constexpr uint32_t kKukaWeldCmdOffset = 250;
 constexpr uint32_t kKukaWeldCmdBytes = 40;
