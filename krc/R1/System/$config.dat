@@ -1037,13 +1037,13 @@ SIGNAL WELD_START $OUT[2278]
 ; other 112. RS_CMD says which reading of the payload is valid. The other
 ; names are aliases of the same bits and are not written by the robot.
 ;
-;   RS_CMD 1  realtime joint     one A1..A6 E1..E3 target and dynamics
-;   RS_CMD 2  joint trajectory   same bits as command 1, one waypoint
-;   RS_CMD 3  weld points        4 endpoints X..C and 4 corner distances
-;   RS_CMD 4  Cartesian stream   X..C E1..E3 S T, path speed, acc, ori
-;   RS_CMD 5  weld process       up to 4 seam processes and task params
-;   RS_CMD 6  execute the latched weld
-;   RS_CMD 7  clear the weld buffer
+;   RS_CMD 1  joint target       A1..A6 E1..E3 and axis/ext dynamics [%]
+;   RS_CMD 2  weld setup         two endpoints + weave/process parameters
+;   RS_CMD 3  execute weld
+;   RS_CMD 4  clear weld buffer
+;   RS_CMD 5  append joint trajectory waypoint (RJ_*)
+;   RS_CMD 6  run buffered joint trajectory (RS_CONT blends between points)
+;   RS_CMD 7  clear joint trajectory buffer
 ;
 ; Command 3 is one transfer. Four XYZABC poses are 96 bytes and four
 ; corner distances are 16 bytes, which fills the payload. E1..E3 and S/T
@@ -1084,7 +1084,8 @@ SIGNAL RS_RESET $IN[3051]
 SIGNAL RS_GOTO_HOME $IN[3052]
 SIGNAL RS_ABORT $IN[3053]
 SIGNAL RS_TOGGLE $IN[3054]
-; $IN[3055]..$IN[3056] reserved
+SIGNAL RS_CONT $IN[3055]
+; $IN[3056] reserved
 SIGNAL RS_TASK_ID $IN[3057]  TO $IN[3072]
 ; $IN[3073]..$IN[3088] reserved
 SIGNAL RS_FRAME_NO $IN[3089]  TO $IN[3104]
@@ -1183,11 +1184,13 @@ SIGNAL RG_E6 $OUT[3889]  TO $OUT[3920]
 ; Task ack  $OUT[3921]..$OUT[4032]
 ; TC_TASK_STATE 0 idle, 1 ready, 2 welding, 3 done, 4 error (see pc2kuka.src)
 ; TC_ERR_CODE   1 task not set, 2 missing data, 3 tool/base, 4 arc timeout,
-;               5 aborted, 6 unknown command, 8 enable off, 9 bad weave
+;               5 aborted, 6 unknown command, 8 enable off, 9 bad weave,
+;               10 trajectory empty, 11 trajectory buffer full
 SIGNAL TC_ACK_CMD $OUT[3921]  TO $OUT[3928]
 SIGNAL TC_TASK_STATE $OUT[3937]  TO $OUT[3944]
 SIGNAL TC_ERR_CODE $OUT[3945]  TO $OUT[3952]
 SIGNAL TC_ACK_TASK_ID $OUT[3953]  TO $OUT[3968]
+SIGNAL TC_TRAJ_POINTS $OUT[3977]  TO $OUT[3984]
 SIGNAL TC_ACK_TOGGLE $OUT[3993]
 SIGNAL TC_TASK_BUSY $OUT[3994]
 SIGNAL TC_ARC_ON $OUT[3995]
@@ -1224,6 +1227,11 @@ DECL REAL WT_AXACC=50.0000
 DECL REAL WT_EXSPEED=100.000
 DECL REAL WT_EXACC=100.000
 DECL BOOL WT_ABORTED=FALSE
+
+; Joint trajectory buffer (RS_CMD 5..7). Payload reuses RJ_*.
+DECL E6AXIS WT_JTRAJ[48]
+DECL INT WT_JTRAJ_N=0
+DECL INT WT_JTRAJ_MAX=48
 
 ; welder request, written by pc2kuka.src and applied by sps.sub so that the
 ; EWM_* outputs have exactly one writer

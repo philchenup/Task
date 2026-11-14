@@ -24,6 +24,9 @@ class QTimer;
 //                         approach / crater / air speed and PTP dynamics
 //   3  execute latched weld task
 //   4  clear weld buffer
+//   5  append one joint waypoint to the trajectory buffer (RJ_*)
+//   6  run all buffered joint waypoints (RS_CONT = blend between points)
+//   7  clear joint trajectory buffer
 //
 // Welder manual I/O: WeldSendData at $IN[2001], cifX offset 250, 40 bytes.
 
@@ -38,7 +41,10 @@ enum KukaCmd : uint8_t {
     KukaCmdJoint = 1,
     KukaCmdWeldSetup = 2,
     KukaCmdWeldExecute = 3,
-    KukaCmdWeldClear = 4
+    KukaCmdWeldClear = 4,
+    KukaCmdJointTrajAppend = 5,
+    KukaCmdJointTrajRun = 6,
+    KukaCmdJointTrajClear = 7
 };
 
 enum KukaWeave : uint8_t {
@@ -65,7 +71,9 @@ enum KukaTaskError : uint8_t {
     KukaErrCommand = 6,
     KukaErrCorner = 7,
     KukaErrEnable = 8,
-    KukaErrWeave = 9
+    KukaErrWeave = 9,
+    KukaErrTrajEmpty = 10,
+    KukaErrTrajFull = 11
 };
 
 struct RobotGetData
@@ -129,6 +137,7 @@ struct TaskAck
     bool arcOn = false;
     uint16_t frameNo = 0;
     uint16_t progress = 0; // 0..10000
+    uint8_t trajPointCount = 0; // buffered waypoints after append / 0 after run
 };
 Q_DECLARE_METATYPE(TaskAck)
 
@@ -151,8 +160,9 @@ struct KukaHeader
     bool goHome = false;
     bool abort = false;
     bool toggle = false;  // owned by ProfinetComm on send
+    bool cont = false;    // PTP approximation between trajectory waypoints (cmd 6)
     uint16_t taskId = 0;
-    uint16_t frameNo = 0;
+    uint16_t frameNo = 0; // append: 1 = first point of a new path (clears buffer)
 };
 
 struct JointCommand
@@ -257,6 +267,9 @@ public slots:
     void stopIoCycle();
 
     void slotSendJoint(const KukaHeader& head, const JointCommand& cmd);
+    void slotAppendJointTrajectory(const KukaHeader& head, const JointCommand& cmd);
+    void slotRunJointTrajectory(const KukaHeader& head);
+    void slotClearJointTrajectory(const KukaHeader& head);
     void slotSendWeldSetup(const KukaHeader& head,
         const WeldPoint& p1, const WeldPoint& p2,
         const WeldProcess& proc, const WeldTaskParams& params);

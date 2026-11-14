@@ -288,6 +288,47 @@ void ProfinetComm::slotSendJoint(const KukaHeader& head, const JointCommand& cmd
     commitImage(buf);
 }
 
+void ProfinetComm::slotAppendJointTrajectory(const KukaHeader& head, const JointCommand& cmd)
+{
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, [this, head, cmd]() {
+            slotAppendJointTrajectory(head, cmd);
+        }, Qt::QueuedConnection);
+        return;
+    }
+    KukaHeader h = prepare(head);
+    h.cmd = KukaCmdJointTrajAppend;
+    uint8_t buf[kKukaImageBytes] = {};
+    MakeSendJoint(buf, sizeof(buf), h, cmd);
+    commitImage(buf);
+}
+
+void ProfinetComm::slotRunJointTrajectory(const KukaHeader& head)
+{
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, [this, head]() { slotRunJointTrajectory(head); }, Qt::QueuedConnection);
+        return;
+    }
+    KukaHeader h = prepare(head);
+    h.cmd = KukaCmdJointTrajRun;
+    uint8_t buf[kKukaImageBytes] = {};
+    MakeSendHeader(buf, h);
+    commitImage(buf);
+}
+
+void ProfinetComm::slotClearJointTrajectory(const KukaHeader& head)
+{
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, [this, head]() { slotClearJointTrajectory(head); }, Qt::QueuedConnection);
+        return;
+    }
+    KukaHeader h = prepare(head);
+    h.cmd = KukaCmdJointTrajClear;
+    uint8_t buf[kKukaImageBytes] = {};
+    MakeSendHeader(buf, h);
+    commitImage(buf);
+}
+
 void ProfinetComm::slotSendWeldSetup(const KukaHeader& head,
     const WeldPoint& p1, const WeldPoint& p2,
     const WeldProcess& proc, const WeldTaskParams& params)
@@ -486,8 +527,9 @@ void ProfinetComm::MakeSendHeader(uint8_t* send, const KukaHeader& head)
     setBit(send, 27, head.goHome);
     setBit(send, 28, head.abort);
     setBit(send, 29, head.toggle);
-    setBits(send, 64, 16, head.frameNo);
+    setBit(send, 30, head.cont);
     setBits(send, 32, 16, head.taskId);
+    setBits(send, 64, 16, head.frameNo);
 }
 
 void ProfinetComm::MakeSendJoint(uint8_t* send, size_t len, const KukaHeader& head, const JointCommand& cmd)
@@ -608,6 +650,7 @@ void ProfinetComm::ParseRecvImage(const uint8_t* recv, size_t len, KukaFeedback&
     out.task.taskState = static_cast<uint8_t>(getBits(recv, 912, 8));
     out.task.errCode = static_cast<uint8_t>(getBits(recv, 920, 8));
     out.task.taskId = static_cast<uint16_t>(getBits(recv, 928, 16));
+    out.task.trajPointCount = static_cast<uint8_t>(getBits(recv, 952, 8));
     out.task.toggle = getBit(recv, 968);
     out.task.busy = getBit(recv, 969);
     out.task.arcOn = getBit(recv, 970);

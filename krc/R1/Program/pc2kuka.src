@@ -4,7 +4,7 @@
 &PARAM TEMPLATE = C:\KRC\Roboter\Template\vorgabe
 DEF pc2kuka( )
 
-  ; $IN[3025]..$IN[4048], RS_CMD 1 joint, 2 weld setup, 3 execute, 4 clear.
+  ; RS_CMD 1 joint, 2 weld setup, 3 weld run, 4 weld clear, 5..7 joint traj.
   ; Latch on RS_TOGGLE edge. EWM_* outputs are written only in sps.sub.
 
   DECL INT nCmd
@@ -26,9 +26,11 @@ DEF pc2kuka( )
   WT_ARC_REQ = FALSE
   WT_GAS_REQ = FALSE
   WT_TASK_READY = FALSE
+  WT_JTRAJ_N = 0
   ClearTask()
 
   TC_ACK_CMD = 0
+  TC_TRAJ_POINTS = 0
   TC_ACK_TASK_ID = 0
   TC_ACK_FRAME_NO = 0
   TC_TASK_STATE = 0
@@ -85,6 +87,12 @@ DEF pc2kuka( )
       WT_ERR = 0
       TC_ERR_CODE = 0
       TC_TASK_STATE = 0
+    CASE 5
+      JointTrajAppend()
+    CASE 6
+      JointTrajRun()
+    CASE 7
+      JointTrajClear()
     DEFAULT
       WT_ERR = 6
       TC_ERR_CODE = 6
@@ -240,6 +248,106 @@ DEF JointMove()
   aTgt.E6 = $AXIS_ACT.E6
   $APO.CPTP = 0
   PTP aTgt
+  TC_ERR_CODE = 0
+  WT_ERR = 0
+  IF TC_TASK_STATE == 4 THEN
+    TC_TASK_STATE = 0
+  ENDIF
+END
+
+DEF JointTrajAppend()
+  DECL E6AXIS aTgt
+
+  RequireEnable()
+  IF WT_ERR <> 0 THEN
+    RETURN
+  ENDIF
+  IF RS_FRAME_NO == 1 THEN
+    WT_JTRAJ_N = 0
+  ENDIF
+  IF WT_JTRAJ_N >= WT_JTRAJ_MAX THEN
+    WT_ERR = 11
+    TC_ERR_CODE = 11
+    TC_TASK_STATE = 4
+    RETURN
+  ENDIF
+  ApplyFrame()
+  IF WT_ERR <> 0 THEN
+    RETURN
+  ENDIF
+  SetJointDyn()
+  aTgt.A1 = BitsToReal(RJ_A1)
+  aTgt.A2 = BitsToReal(RJ_A2)
+  aTgt.A3 = BitsToReal(RJ_A3)
+  aTgt.A4 = BitsToReal(RJ_A4)
+  aTgt.A5 = BitsToReal(RJ_A5)
+  aTgt.A6 = BitsToReal(RJ_A6)
+  aTgt.E1 = BitsToReal(RJ_E1)
+  aTgt.E2 = BitsToReal(RJ_E2)
+  aTgt.E3 = BitsToReal(RJ_E3)
+  aTgt.E4 = $AXIS_ACT.E4
+  aTgt.E5 = $AXIS_ACT.E5
+  aTgt.E6 = $AXIS_ACT.E6
+  WT_JTRAJ_N = WT_JTRAJ_N + 1
+  WT_JTRAJ[WT_JTRAJ_N] = aTgt
+  TC_TRAJ_POINTS = WT_JTRAJ_N
+  TC_ERR_CODE = 0
+  WT_ERR = 0
+  TC_PROGRESS = 0
+  IF TC_TASK_STATE == 4 THEN
+    TC_TASK_STATE = 0
+  ENDIF
+END
+
+DEF JointTrajRun()
+  DECL INT i
+  DECL INT nBlend
+
+  RequireEnable()
+  IF WT_ERR <> 0 THEN
+    RETURN
+  ENDIF
+  IF TC_TASK_BUSY THEN
+    RETURN
+  ENDIF
+  IF WT_JTRAJ_N < 1 THEN
+    WT_ERR = 10
+    TC_ERR_CODE = 10
+    TC_TASK_STATE = 4
+    RETURN
+  ENDIF
+  IF RS_CONT THEN
+    nBlend = 80
+  ELSE
+    nBlend = 0
+  ENDIF
+  TC_TASK_BUSY = TRUE
+  TC_TASK_STATE = 2
+  TC_PROGRESS = 0
+  SetStoredPtp()
+  FOR i = 1 TO WT_JTRAJ_N
+    TC_PROGRESS = ((i - 1) * 10000) / WT_JTRAJ_N
+    IF (RS_CONT) AND (i < WT_JTRAJ_N) THEN
+      $APO.CPTP = nBlend
+      PTP WT_JTRAJ[i] C_PTP
+    ELSE
+      $APO.CPTP = 0
+      PTP WT_JTRAJ[i]
+    ENDIF
+  ENDFOR
+  WT_JTRAJ_N = 0
+  TC_TRAJ_POINTS = 0
+  TC_PROGRESS = 10000
+  TC_TASK_BUSY = FALSE
+  TC_TASK_STATE = 3
+  TC_ERR_CODE = 0
+  WT_ERR = 0
+END
+
+DEF JointTrajClear()
+  WT_JTRAJ_N = 0
+  TC_TRAJ_POINTS = 0
+  TC_PROGRESS = 0
   TC_ERR_CODE = 0
   WT_ERR = 0
   IF TC_TASK_STATE == 4 THEN

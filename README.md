@@ -9,16 +9,20 @@
 | 1 | 关节运动 | `RJ_A1..RJ_E3` + 轴/外部轴速度加速度 [%] |
 | 2 | 焊缝配置 | 两点 `WS_P1_*` / `WS_P2_*` + 摆动 `WS_SPEED/AMP/FREQ/WEAVE` + 焊机 Job/Wire/Volt/Dyn |
 | 3 | 执行焊接 | 需先下发 cmd 2，且 `RS_ENABLE=1` |
-| 4 | 清除任务缓冲 | |
+| 4 | 清除焊缝缓冲 | |
+| 5 | 追加点到关节轨迹缓冲 | 与 cmd 1 相同 `RJ_*`；`frameNo=1` 表示新轨迹起点（清空缓冲） |
+| 6 | 执行已缓冲的关节轨迹 | `cont=true` 时路点间 PTP 逼近 |
+| 7 | 清空关节轨迹缓冲 | |
 
-每次命令在同一帧内翻转 `RS_TOGGLE`；机器人沿边沿锁存，并在 `TC_ACK_TOGGLE` 回显。
+每次命令在同一帧内翻转 `RS_TOGGLE`；机器人沿边沿锁存，并在 `TC_ACK_TOGGLE` 回显。`TaskAck::trajPointCount` 为当前缓冲点数。
 
 ## 推荐上位机流程
 
 1. **点动到位**：`slotSendJoint`（`enable=true`，带 `JointCommand` 速度/加速度）。
-2. **下发焊缝**：`slotSendWeldSetup`（两点 + `WeldProcess` + `WeldTaskParams`）。
-3. **起弧焊接**：`slotSendTaskCommand`（`cmd=KukaCmdWeldExecute`）。
-4. **焊机维护**：`slotSendWeldData`（`weld_mode`、`weld_arc_start`、`gas_ready`、`extern_control_enable`、`weld_job_number`、校正值等必要位）。
+2. **关节轨迹**：对每个路点调用 `slotAppendJointTrajectory`（首点设 `frameNo=1`），全部下发后 `slotRunJointTrajectory`（连续运动设 `cont=true`）；可 `slotClearJointTrajectory` 放弃。
+3. **下发焊缝**：`slotSendWeldSetup`（两点 + `WeldProcess` + `WeldTaskParams`）。
+4. **起弧焊接**：`slotSendTaskCommand`（`cmd=KukaCmdWeldExecute`）。
+5. **焊机维护**：`slotSendWeldData`（`weld_mode`、`weld_arc_start`、`gas_ready`、`extern_control_enable`、`weld_job_number`、校正值等必要位）。
 
 ## 机器人上行
 
