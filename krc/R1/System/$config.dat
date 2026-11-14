@@ -1029,7 +1029,7 @@ SIGNAL WELD_START $OUT[2278]
 ;==================================
 ; Userdefined robot weld comm
 ;==================================
-; IN and OUT both start at 3024. Low signal number is the LSB.
+; IN/OUT block $IN[3024]..$IN[4048]. Bit 3024 is pad; data starts at 3025. LSB first.
 ; 32 bit fields are IEEE754 binary32. A SIGNAL is an integer view of those
 ; bits, so src converts them with BitsToReal / RealToBits.
 ;
@@ -1074,6 +1074,8 @@ SIGNAL WELD_START $OUT[2278]
 ; $IN[2001], cifX offset 250.
 
 ;DEFINE IN IO
+; $IN[3024] pad: next signal $IN[3025] is byte-aligned (cifX byte offset 378).
+SIGNAL RS_IMG_PAD $IN[3024]
 ; Header  $IN[3025]..$IN[3152], 16 bytes. Valid for every command.
 SIGNAL RS_CMD $IN[3025]  TO $IN[3032]
 SIGNAL RS_TOOL_ID $IN[3033]  TO $IN[3040]
@@ -1140,6 +1142,7 @@ SIGNAL WS_SAMPLES $IN[3921]  TO $IN[3928]
 ; $IN[3929]..$IN[4048] spare for RS_CMD 2
 
 ;DEFINE OUT IO
+SIGNAL RS_IMG_PAD $OUT[3024]
 ; Robot feedback  $OUT[3025]..$OUT[3632]
 SIGNAL RG_AXIS_VEL $OUT[3025]  TO $OUT[3056]
 SIGNAL RG_AXIS_ACC $OUT[3057]  TO $OUT[3088]
