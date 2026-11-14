@@ -977,7 +977,7 @@ SIGNAL PLC_MSG_OK $IN[2265]
 ; Weld commands that have no signal in the block above. The former
 ; WeldSendData at $IN[3657] carried these, and they move here so that the
 ; welder interface stays in one place. Byte offset 284, the next byte
-; boundary after PLC_MSG_OK. $IN[2321]..$IN[3023] free; $IN[3024] image pad.
+; boundary after PLC_MSG_OK. $IN[2321]..$IN[3024] stays free.
 SIGNAL PLC_EWM_GUN_CLEAR $IN[2273]
 SIGNAL PLC_EWM_ERRACK $IN[2274]
 SIGNAL PLC_EWM_SPOT_MODE $IN[2275]
@@ -1029,11 +1029,11 @@ SIGNAL WELD_START $OUT[2278]
 ;==================================
 ; Userdefined robot weld comm
 ;==================================
-; IN/OUT block $IN[3024]..$IN[4048]. Bit 3024 is pad; data starts at 3025. LSB first.
+; IN/OUT robot image $IN[3025]..$IN[4048] (128 bytes). Low signal number is LSB.
 ; 32 bit fields are IEEE754 binary32. A SIGNAL is an integer view of those
 ; bits, so src converts them with BitsToReal / RealToBits.
 ;
-; 3024..4048 is 128 bytes. The header is 16 bytes and the payload is the
+; 3025..4048 is 128 bytes. The header is 16 bytes and the payload is the
 ; other 112. RS_CMD says which reading of the payload is valid. The other
 ; names are aliases of the same bits and are not written by the robot.
 ;
@@ -1074,8 +1074,6 @@ SIGNAL WELD_START $OUT[2278]
 ; $IN[2001], cifX offset 250.
 
 ;DEFINE IN IO
-; $IN[3024] pad: next signal $IN[3025] is byte-aligned (cifX byte offset 378).
-SIGNAL RS_IMG_PAD $IN[3024]
 ; Header  $IN[3025]..$IN[3152], 16 bytes. Valid for every command.
 SIGNAL RS_CMD $IN[3025]  TO $IN[3032]
 SIGNAL RS_TOOL_ID $IN[3033]  TO $IN[3040]
@@ -1142,7 +1140,7 @@ SIGNAL WS_SAMPLES $IN[3921]  TO $IN[3928]
 ; $IN[3929]..$IN[4048] spare for RS_CMD 2
 
 ;DEFINE OUT IO
-SIGNAL RS_IMG_PAD $OUT[3024]
+SIGNAL RG_IMG_PAD $OUT[3024]
 ; Robot feedback  $OUT[3025]..$OUT[3632]
 SIGNAL RG_AXIS_VEL $OUT[3025]  TO $OUT[3056]
 SIGNAL RG_AXIS_ACC $OUT[3057]  TO $OUT[3088]

@@ -8,7 +8,7 @@ DEF  SPS ( )
   ; outputs, so that the manual commands from the PC and the requests from
   ; pc2kuka.src cannot fight over them.
   ;
-  ; OUT map block 3024..4048; data starts at 3025 (3024 is pad).
+  ; OUT robot image $OUT[3025]..$OUT[4048].
   ; Low index is LSB. 32-bit signals are IEEE754 binary32.
   ;
   ; RG_AXIS_VEL      max |A1..A6| speed, deg/s
