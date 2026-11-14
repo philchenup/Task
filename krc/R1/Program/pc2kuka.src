@@ -4,7 +4,7 @@
 &PARAM TEMPLATE = C:\KRC\Roboter\Template\vorgabe
 DEF pc2kuka( )
 
-  ; RS_CMD 1 joint, 2 weld setup, 3 weld run, 4 weld clear, 5..7 joint traj.
+  ; $IN[3024]..$IN[4047] image. RS_CMD 1 joint, 2 weld, 3..4 weld run/clear, 5..7 traj.
   ; Latch on RS_TOGGLE edge. EWM_* outputs are written only in sps.sub.
 
   DECL INT nCmd

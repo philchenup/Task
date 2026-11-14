@@ -14,7 +14,9 @@
 
 class QTimer;
 
-// KUKA $IN/$OUT[3025..4048]: 128-byte process image (cifX byte offset 378).
+// KUKA $IN/$OUT[3024..4048]: 128-byte process image (cifX byte offset 377).
+// Byte 0 of the image is $IN[3024] / $OUT[3024]; bit packing in this file is
+// relative to that first signal.
 // The PC toggles KukaHeader::toggle on each command; KUKA latches on the edge
 // and echoes it in TaskAck::toggle.
 //
@@ -31,8 +33,9 @@ class QTimer;
 // Welder manual I/O: WeldSendData at $IN[2001], cifX offset 250, 40 bytes.
 
 constexpr uint32_t kKukaImageBytes = 128;
-constexpr uint32_t kKukaCommandOffset = 378;
-constexpr uint32_t kKukaStatusOffset = 378;
+constexpr uint32_t kKukaSignalBase = 3024;
+constexpr uint32_t kKukaCommandOffset = (kKukaSignalBase - 1) / 8; // 377
+constexpr uint32_t kKukaStatusOffset = kKukaCommandOffset;
 constexpr uint32_t kKukaWeldCmdOffset = 250;
 constexpr uint32_t kKukaWeldCmdBytes = 40;
 

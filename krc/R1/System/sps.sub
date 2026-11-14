@@ -8,7 +8,7 @@ DEF  SPS ( )
   ; outputs, so that the manual commands from the PC and the requests from
   ; pc2kuka.src cannot fight over them.
   ;
-  ; Signal numbers are the $OUT map starting at 3025.
+  ; Signal numbers are the $OUT map starting at 3024.
   ; Low index is LSB. 32-bit signals are IEEE754 binary32.
   ;
   ; RG_AXIS_VEL      max |A1..A6| speed, deg/s
