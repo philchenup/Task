@@ -911,9 +911,9 @@ DECL FRAME IL_Target
 ; Weld task channel types
 ;----------------------------------
 ; Two-point seam: start and end in base/tool. WEAVE 0 off, 1 triangle, 2 sine.
-
+; One-line STRUC (required in DEFDAT on many KSS builds; block STRUC/END may not register).
 STRUC WELD_PT_T E6POS P,BOOL PVALID
-STRUC WELD_SEG_T REAL SPEED,AMP,FREQ,INT WEAVE,JOB,WIRE,VOLT,DYN,BOOL SVALID
+STRUC WELD_SEG_T REAL SPEED,AMP,FREQ,INT WEAVE,INT JOB,INT WIRE,INT VOLT,INT DYN,BOOL SVALID
 
 ;==================================
 ; Userdefined Externals 
