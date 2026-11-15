@@ -6,6 +6,7 @@ DEF pc2kuka( )
 
   ; $IN[3025]..$IN[4048] image. RS_CMD 1 joint, 2 weld, 3..4 weld run/clear, 5..7 traj.
   ; Latch on RS_TOGGLE edge. EWM_* outputs are written only in sps.sub.
+  ; RG_X..RG_C ($POS_ACT) via PublishRobotPose on $TIMER[23] interrupt 24 (not in SPS).
 
   DECL INT nCmd
 
@@ -42,6 +43,12 @@ DEF pc2kuka( )
 
   INTERRUPT DECL 25 WHEN RS_ABORT==TRUE DO TaskAbort()
   INTERRUPT ON 25
+
+  $TIMER_STOP[23] = FALSE
+  $TIMER[23] = 0
+  INTERRUPT DECL 24 WHEN $TIMER[23] >= 20 DO PublishRobotPose()
+  INTERRUPT ON 24
+  PublishRobotPose()
 
   LOOP
     IF WT_ABORTED THEN

@@ -18,8 +18,7 @@ DEF  SPS ( )
   ; RG_E1..RG_E3     $AXIS_ACT.E1..E3
   ; RG_E4..RG_E6     $AXIS_ACT.E4..E6
   ; RG_SJ1..RG_SJ6   $AXIS_ACT.A1..A6, deg
-  ; RG_X..RG_C       $POS_ACT in the current tool and base
-  ; RG_STATUS_S/T    $POS_ACT.S and .T, the arm configuration
+  ; RG_X..RG_C       $POS_ACT, written by pc2kuka PublishRobotPose (SPS cannot read POS)
   ; RG_TCP_VEL       $VEL_ACT in mm/s, the actual path speed
   ; RG_OV_PRO        $OV_PRO, which scales the programmed weld speed
   ; RG_MODE_OP       1 T1, 2 T2, 3 AUT, 4 EX
@@ -39,8 +38,8 @@ DEF  SPS ( )
   ; WG_WIRE_STICKING, WG_WELD_ERROR, WG_MALFUNCTION, WG_ERR_CODE
   ;   have no source input in $config.dat and are written FALSE / 0.
   ;
-  ; This submit uses $TIMER[20] and $TIMER[22]. Do not use those timers in a
-  ; robot program.
+  ; This submit uses $TIMER[20] and $TIMER[22]. pc2kuka uses $TIMER[21] (arc),
+  ; $TIMER[23] (pose publish). Do not reuse those in other robot programs.
 
   DECL INT i
   DECL INT iDtMs
@@ -176,13 +175,6 @@ DEF  SPS ( )
     RG_SJ4 = RealToBits(rA[4])
     RG_SJ5 = RealToBits(rA[5])
     RG_SJ6 = RealToBits(rA[6])
-
-    RG_X = RealToBits($POS_ACT.X)
-    RG_Y = RealToBits($POS_ACT.Y)
-    RG_Z = RealToBits($POS_ACT.Z)
-    RG_A = RealToBits($POS_ACT.A)
-    RG_B = RealToBits($POS_ACT.B)
-    RG_C = RealToBits($POS_ACT.C)
 
     RG_OV_PRO = $OV_PRO
     RG_ACT_TOOL = $TOOL
