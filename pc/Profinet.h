@@ -94,6 +94,13 @@ struct RobotGetData
     float SJ4;
     float SJ5;
     float SJ6;
+
+    float X; // mm, TCP in current BASE/TOOL ($POS_ACT)
+    float Y;
+    float Z;
+    float A; // deg
+    float B;
+    float C;
 };
 Q_DECLARE_METATYPE(RobotGetData)
 

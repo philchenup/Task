@@ -606,7 +606,7 @@ void ProfinetComm::ParseRecvWeldData(const uint8_t* recv, size_t len, WeldGetDat
 
 void ProfinetComm::ParseRecvRobotData(const uint8_t* recv, size_t len, RobotGetData& in)
 {
-    if (!recv || len < 52)
+    if (!recv || len < 76)
         return;
     in.axis_vel = u32ToFloat(getBits(recv, 0, 32));
     in.axis_acc = u32ToFloat(getBits(recv, 32, 32));
@@ -621,6 +621,12 @@ void ProfinetComm::ParseRecvRobotData(const uint8_t* recv, size_t len, RobotGetD
     in.SJ4 = u32ToFloat(getBits(recv, 320, 32));
     in.SJ5 = u32ToFloat(getBits(recv, 352, 32));
     in.SJ6 = u32ToFloat(getBits(recv, 384, 32));
+    in.X = u32ToFloat(getBits(recv, 416, 32));
+    in.Y = u32ToFloat(getBits(recv, 448, 32));
+    in.Z = u32ToFloat(getBits(recv, 480, 32));
+    in.A = u32ToFloat(getBits(recv, 512, 32));
+    in.B = u32ToFloat(getBits(recv, 544, 32));
+    in.C = u32ToFloat(getBits(recv, 576, 32));
 }
 
 void ProfinetComm::ParseRecvImage(const uint8_t* recv, size_t len, KukaFeedback& out)
