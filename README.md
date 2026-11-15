@@ -26,7 +26,7 @@
 
 ## 机器人上行
 
-- **RobotGetData**：轴/外部轴速度加速度、E1–E3、A1–A6 关节角。
+- **RobotGetData**：轴/外部轴速度加速度、E1–E3、A1–A6 关节角、**X Y Z A B C**（`$POS_ACT`，当前 BASE/TOOL 下 TCP 位姿，mm/deg）。
 - **WeldGetData**：电弧稳定、电源就绪、焊接中、电压/电流/送丝速度。
 - **KukaStatus**：驱动/使能/模式/程序状态、`pcLinkOk`、心跳、E4–E6。
 - **TaskAck**：任务状态、错误码、进度、`arcOn`。

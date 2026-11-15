@@ -175,6 +175,13 @@ DEF  SPS ( )
     RG_SJ5 = RealToBits(rA[5])
     RG_SJ6 = RealToBits(rA[6])
 
+    RG_X = RealToBits($POS_ACT.X)
+    RG_Y = RealToBits($POS_ACT.Y)
+    RG_Z = RealToBits($POS_ACT.Z)
+    RG_A = RealToBits($POS_ACT.A)
+    RG_B = RealToBits($POS_ACT.B)
+    RG_C = RealToBits($POS_ACT.C)
+
     RG_OV_PRO = $OV_PRO
     RG_ACT_TOOL = WT_TOOL
     RG_ACT_BASE = WT_BASE
