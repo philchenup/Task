@@ -21,6 +21,8 @@ DEF pc2kuka( )
   WT_BASE = 0
   BAS(#TOOL,WT_TOOL)
   BAS(#BASE,WT_BASE)
+  WT_TOOL = $ACT_TOOL
+  WT_BASE = $ACT_BASE
   WT_ERR = 0
   WT_SAMPLES = 0
   WT_ABORTED = FALSE
@@ -47,8 +49,8 @@ DEF pc2kuka( )
   $TIMER_STOP[23] = FALSE
   $TIMER[23] = 0
   INTERRUPT DECL 24 WHEN $TIMER[23] >= 20 DO PublishRobotPose()
-  INTERRUPT ON 24
   PublishRobotPose()
+  INTERRUPT ON 24
 
   LOOP
     IF WT_ABORTED THEN
