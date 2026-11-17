@@ -1,12 +1,13 @@
 /**
- * @file expertprocess.h
- * @brief º¸½Ó×¨¼Ò¹¤ÒÕ¿â¶Ô»°¿ò¡£
+ * @file expertProcess.h
+ * @brief 焊接专家工艺库对话框。
  *
- * ½çÃæÒÀ¾Ý FSWeld2800 ÃâÊ¾½ÌÈí¼þµÄ×¨¼Ò¹¤ÒÕ¿â£¬²¢ÓÃ CypWeld ÓÃ»§ÊÖ²áÖÐ
- * ¹¤ÒÕ²ÎÊý¡¢¹¤ÒÕÆ¥Åä±í¡¢¶à²ã¶àµÀºÍÈ«¾Ö¹¤ÒÕµÄËµÃ÷²¹È«²úÆ·Ò³Î´Õ¹¿ªµÄÏî¡£
- * ¼Ì³Ð ct::CustomDialog£¬ÓÉ createDialog µ¯³ö£º
+ * 界面依据 FSWeld2800 免示教软件的专家工艺库，并用 CypWeld 用户手册中
+ * 工艺参数、工艺匹配表、多层多道和全局工艺的说明补全产品页未展开的项。
+ * 继承 ct::CustomDialog，由 createDialog 弹出：
  * ct::createDialog<ExpertProcess>(parent, "ExpertProcess", cloudview, cloudtree, console, true);
  */
+
 #ifndef CT_TOOL_EXPERTPROCESS_H
 #define CT_TOOL_EXPERTPROCESS_H
 
@@ -92,7 +93,7 @@ public:
     /** @brief 单焊道电弧、摆动、包角等参数。 */
     struct PassParams
     {
-        QString name = QStringLiteral("º¸µÀ1£¨¸ùº¸µÀ£©");
+        QString name = QStringLiteral("焊道1（根焊道）");
         int weldPosition = PosFillet;
         double stickout = 15.0;
         double pushAngle = 0.0;

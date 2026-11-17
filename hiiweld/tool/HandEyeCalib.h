@@ -34,12 +34,12 @@ enum Col { COL_INDEX = 0, COL_CHECK, COL_X, COL_Y, COL_Z, COL_COUNT };
 /** @brief 3D 一致性评估结果（各姿态/点位误差统计）。 */
 struct Point3DConsistency
 {
-    Eigen::Vector3d meanAbsError = Eigen::Vector3d::Zero(); // È«¾Ö X/Y/Z Æ½¾ù¾ø¶ÔÎó²î
+    Eigen::Vector3d meanAbsError = Eigen::Vector3d::Zero(); // 全局 X/Y/Z 平均绝对误差
     double reproject_error_pixel = 0.0;
     int    numPoses = 0;
 
-    std::vector<Eigen::Vector3d> perPoseMeanAbsError; // [i] ¸ÃÎ»×Ë X/Y/Z Æ½¾ù¾ø¶ÔÎó²î
-    std::vector<double>          perPoseError;        // [i] ¸ÃÎ»×Ë±êÁ¿Îó²î£¨Å·ÊÏ¾àÀë¾ùÖµ£©
+    std::vector<Eigen::Vector3d> perPoseMeanAbsError; // [i] 该位姿 X/Y/Z 平均绝对误差
+    std::vector<double>          perPoseError;        // [i] 该位姿标量误差（欧氏距离均值）
 
     std::vector<std::vector<Eigen::Vector3d>> perPointDev;
 
@@ -66,15 +66,12 @@ public:
     explicit HandEyeCalib(QWidget* parent = nullptr);
     ~HandEyeCalib();
 
-        /** @brief 标定板角点/圆点 + OpenCV 手眼标定主流程。 */
+    /** @brief 标定板角点/圆点 + OpenCV 手眼标定主流程。 */
+    void markCalibMethod();
 
-void markCalibMethod();
+    /** @brief TCP 点触 + 刚体 SVD 手眼标定。 */
+    void tcpCalibMethod();
 
-        /** @brief TCP 点触 + 刚体 SVD 手眼标定。 */
-
-void tcpCalibMethod();
-
-    // ¶¨ÒåÊäÈëÊý¾ÝÀàÐÍ
     /** @brief 位姿 JSON 中旋转表示方式。 */
     enum class RotateType
     {
@@ -100,17 +97,17 @@ void tcpCalibMethod();
 
     void updateTable(QTableWidget* table, std::vector<bool>& validIndex, const Point3DConsistency& res);
     /**
-     * @brief "ÑÛÔÚÊÖÍâ" (Eye-to-Hand) ÊÖÑÛ±ê¶¨
-     * @param pose_path »úÆ÷ÈËÎ»×ËCSVÎÄ¼þÂ·¾¶
-     * @param image_path ±ê¶¨Í¼ÏñËùÔÚÎÄ¼þ¼ÐÂ·¾¶
-     * @param square_size ÆåÅÌ¸ñ·½¸ñ´óÐ¡
-     * @param pattern_x ÆåÅÌ¸ñºáÏòµãÊý
-     * @param pattern_y ÆåÅÌ¸ñ×ÝÏòµãÊý
-     * @param chess_board ÊÇ·ñÎªÆåÅÌ¸ñ
-     * @param black_panel ÊÇ·ñÎªºÚÉ«Ãæ°å
-     * @param symmetric ÊÇ·ñÎª¶Ô³ÆÔ²µãÍø¸ñ
-     * @param save_path ´¦ÀíºóÍ¼ÏñµÄ±£´æÂ·¾¶
-     * @return std::tuple<cv::Mat, double, cv::Mat, cv::Mat> ·µ»ØÏà»úµ½»ù×ùµÄ±ä»»¾ØÕó¡¢Æ½¾ùÖØÍ¶Ó°Îó²î¡¢Ïà»úÄÚ²Î¾ØÕó¡¢»û±äÏµÊý
+     * @brief 眼在手外标定（Eye-to-Hand；函数名 eye_on_hand）。
+     * @param pose_path 机器人位姿 CSV/JSON 路径
+     * @param image_path 标定图像文件夹路径
+     * @param square_size 棋盘格方格边长
+     * @param pattern_x 棋盘格横向角点数
+     * @param pattern_y 棋盘格纵向角点数
+     * @param chess_board 是否为棋盘格
+     * @param symmetric 是否为对称圆点网格
+     * @param save_path 处理后图像保存路径
+     * @param cons 输出 3D 一致性评估
+     * @return 相机相对基座的仿射变换
      */
     Eigen::Affine3f eye_on_hand(
         const std::string& pose_path,
@@ -125,17 +122,17 @@ void tcpCalibMethod();
 
 
     /**
-     * @brief "ÑÛÔÚÊÖÉÏ" (Eye-in-Hand) ÊÖÑÛ±ê¶¨
-     * @param pose_path »úÆ÷ÈËÎ»×ËCSVÎÄ¼þÂ·¾¶
-     * @param image_path ±ê¶¨Í¼ÏñËùÔÚÎÄ¼þ¼ÐÂ·¾¶
-     * @param square_size ÆåÅÌ¸ñ·½¸ñ´óÐ¡
-     * @param pattern_x ÆåÅÌ¸ñºáÏòµãÊý
-     * @param pattern_y ÆåÅÌ¸ñ×ÝÏòµãÊý
-     * @param chess_board ÊÇ·ñÎªÆåÅÌ¸ñ
-     * @param black_panel ÊÇ·ñÎªºÚÉ«Ãæ°å
-     * @param symmetric ÊÇ·ñÎª¶Ô³ÆÔ²µãÍø¸ñ
-     * @param save_path ´¦ÀíºóÍ¼ÏñµÄ±£´æÂ·¾¶
-     * @return std::tuple<cv::Mat, double, cv::Mat, cv::Mat> ·µ»ØÏà»úµ½Ä©¶ËµÄ±ä»»¾ØÕó¡¢Æ½¾ùÖØÍ¶Ó°Îó²î¡¢Ïà»úÄÚ²Î¾ØÕó¡¢»û±äÏµÊý
+     * @brief 眼在手上标定（Eye-in-Hand；函数名 eye_in_hand）。
+     * @param pose_path 机器人位姿 CSV/JSON 路径
+     * @param image_path 标定图像文件夹路径
+     * @param square_size 棋盘格方格边长
+     * @param pattern_x 棋盘格横向角点数
+     * @param pattern_y 棋盘格纵向角点数
+     * @param chess_board 是否为棋盘格
+     * @param symmetric 是否为对称圆点网格
+     * @param save_path 处理后图像保存路径
+     * @param cons 输出 3D 一致性评估
+     * @return 相机相对法兰/末端的仿射变换
      */
     Eigen::Affine3f eye_in_hand(
         const std::string& pose_path,
@@ -149,8 +146,8 @@ void tcpCalibMethod();
         Point3DConsistency& cons);
 
     /**
-     * @brief ÑÛÔÚÊÖÉÏ 3D Ò»ÖÂÐÔ£ºp_base = T_end2base * T_cam2end * T_board2cam * p
-     *        È«²¿ÓÐÐ§Î»×Ë¶¼²ÎÓë¾ùÖµ£¬²»Ìø¹ýµÚ 0 Ö¡¡£
+     * @brief 眼在手上 3D 一致性：p_base = T_end2base * T_cam2end * T_board2cam * p
+     *        全部有效位姿参与均值，不跳过第 0 帧。
      */
     Point3DConsistency evaluate3DPointConsistencyEyeInHand(
         const std::vector<cv::Mat>& R_board2cams,
@@ -161,8 +158,8 @@ void tcpCalibMethod();
         const std::vector<cv::Point3f>& objp);
 
     /**
-     * @brief ÑÛÔÚÊÖÍâ 3D Ò»ÖÂÐÔ£ºp_end = T_end2base^{-1} * T_cam2base * T_board2cam * p
-     *        Èë²ÎÓëÑÛÔÚÊÖÉÏÏàÍ¬£¨end->base£©¡£È«²¿ÓÐÐ§Î»×Ë¶¼²ÎÓë¾ùÖµ£¬²»Ìø¹ýµÚ 0 Ö¡¡£
+     * @brief 眼在手外 3D 一致性：p_end = T_end2base^{-1} * T_cam2base * T_board2cam * p
+     *        输入位姿约定与眼在手上相同（end→base）；全部有效位姿参与均值。
      */
     Point3DConsistency evaluate3DPointConsistencyEyeOnHand(
         const std::vector<cv::Mat>& R_board2cams,
