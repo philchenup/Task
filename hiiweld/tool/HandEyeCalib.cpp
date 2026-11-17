@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file HandEyeCalib.cpp
  * @brief HandEyeCalib 实现：OpenCV 标定、3D 一致性、VTK 预览。
  * @author philchen
@@ -62,8 +62,8 @@ namespace {
             svd.singularValues()(1) < 1e-6 * svd.singularValues()(0);
     }
 
-        /** @brief 点对点刚体变换 SVD。 */
-bool EstimateRigid(const Eigen::Matrix3Xd& src, const Eigen::Matrix3Xd& dst,
+    /** @brief 点对点刚体变换 SVD。 */
+    bool EstimateRigid(const Eigen::Matrix3Xd& src, const Eigen::Matrix3Xd& dst,
         Eigen::Affine3d& T)
     {
         if (src.cols() < 3) {

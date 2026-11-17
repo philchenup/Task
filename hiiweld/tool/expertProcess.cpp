@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file expertProcess.cpp
  * @brief ExpertProcess 焊接专家工艺库 UI 与 JSON 读写。
  * @brief 焊接专家工艺库对话框。
