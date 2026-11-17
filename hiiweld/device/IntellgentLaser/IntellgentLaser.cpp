@@ -10,8 +10,8 @@
 #include <QDateTime>
 
 /**
- * @brief ?? PF400 ?????? SDK?
- * @param parent Qt ????
+ * @brief 构造 PF400 驱动并初始化 SDK。
+ * @param parent Qt 父对象。
  */
 ILaser_PF400::ILaser_PF400(QObject* parent)
     : ILaser(parent), 
@@ -20,7 +20,7 @@ ILaser_PF400::ILaser_PF400(QObject* parent)
     Laser_Init();
 }
 
-/** @brief ???????????? SDK? */
+/** @brief 断开传感器连接并反初始化 SDK。 */
 ILaser_PF400::~ILaser_PF400()
 {
     DisConnSensor();
@@ -30,8 +30,8 @@ ILaser_PF400::~ILaser_PF400()
 }
 
 /**
- * @brief ?? InitSDK ?????????? YUV ???
- * @return ?????? true?
+ * @brief 调用 InitSDK 并注册毫米轮廓与两路 YUV 回调。
+ * @return 初始化成功为 true。
  */
 bool ILaser_PF400::Laser_Init() {
     int32_t dwRes = InitSDK();
@@ -49,8 +49,8 @@ bool ILaser_PF400::Laser_Init() {
 }
 
 /**
- * @brief ??????????? IPv4 ? ConnectToSensor???????? sendConStatus?
- * @param camIp ??? IP?
+ * @brief 已连接则断开；否则校验 IPv4 并 ConnectToSensor，汇总端口结果后 sendConStatus。
+ * @param camIp 传感器 IP。
  */
 void ILaser_PF400::connectDevice(const std::string& camIp) {
     
@@ -111,7 +111,7 @@ void ILaser_PF400::connectDevice(const std::string& camIp) {
     return;
 }
 
-/** @brief DetectAllSensor ??? FetchAllSensorInfo???????? IP? */
+/** @brief DetectAllSensor 后轮询 FetchAllSensorInfo，上报发现的设备 IP。 */
 void ILaser_PF400::searchDevice()
 {
     DetectAllSensor();
@@ -138,8 +138,8 @@ void ILaser_PF400::searchDevice()
 }
 
 /**
- * @brief ?? m_capture ??? UI ?????
- * @param bEnable true ?????????false ???
+ * @brief 更新 m_capture 并通知 UI 采集状态。
+ * @param bEnable true 开启采集回调处理，false 关闭。
  */
 void ILaser_PF400::captureDevice(const bool& bEnable)
 {
@@ -159,8 +159,8 @@ void ILaser_PF400::captureDevice(const bool& bEnable)
 }
 
 /**
- * @brief ?? SetLaserEnable ????????
- * @param bEnable true ???false ???
+ * @brief 调用 SetLaserEnable 控制激光器开关。
+ * @param bEnable true 开光，false 关光。
  */
 void ILaser_PF400::openLaser(const bool& bEnable) {
     if (!connected) {
@@ -179,8 +179,8 @@ void ILaser_PF400::openLaser(const bool& bEnable) {
 }
 
 /**
- * @brief ??????????????????
- * @param bEnable true ?????false ?????
+ * @brief 依次启用传感器、采集相机与监控相机。
+ * @param bEnable true 全部打开，false 全部关闭。
  */
 void ILaser_PF400::openSensor(const bool& bEnable) {
     if (!connected) {
@@ -218,10 +218,10 @@ void ILaser_PF400::openSensor(const bool& bEnable) {
 }
 
 /**
- * @brief ???? SDK ???50ms ?????????????????
- * @param pMMContourData ?????
- * @param pUser ILaser_PF400*?
- * @param dwInstanceId ?? ID??????
+ * @brief 毫米轮廓 SDK 回调：50ms 节流，构建轮廓点云与特征点并上报。
+ * @param pMMContourData 轮廓数据。
+ * @param pUser ILaser_PF400 实例指针。
+ * @param dwInstanceId 实例 ID（未使用）。
  */
 void ILaser_PF400::sdkCallbackMMProfile(IntelligentMillionOutlineInspect* pMMContourData, void* pUser, uint32_t dwInstanceId)
 {
@@ -241,6 +241,7 @@ void ILaser_PF400::sdkCallbackMMProfile(IntelligentMillionOutlineInspect* pMMCon
 
     // if (pMMContourData[0].InspectResult->parseRes != 1) return;
 
+    // 轮廓点云
     ct::Cloud::Ptr cloud_contour(new ct::Cloud);
     cloud_contour->resize(INTELLIGENT_MAX_PIXEL_NUM);
     for (int i = 0; i < INTELLIGENT_MAX_PIXEL_NUM; ++i) {
@@ -262,10 +263,10 @@ void ILaser_PF400::sdkCallbackMMProfile(IntelligentMillionOutlineInspect* pMMCon
 }
 
 /**
- * @brief ???? YUV ??????? BGR ? sendCaptureImage?
- * @param pBitmapData YUV ??
- * @param pUser ILaser_PF400*?
- * @param dwInstanceId ?? ID?
+ * @brief 采集相机 YUV 回调：节流后转 BGR 并 sendCaptureImage。
+ * @param pBitmapData YUV 帧。
+ * @param pUser ILaser_PF400 实例指针。
+ * @param dwInstanceId 实例 ID。
  */
 void ILaser_PF400::sdkCallbackScatterBitmap1(IntelligentYUV* pBitmapData, void* pUser, uint32_t dwInstanceId)
 {
@@ -286,11 +287,12 @@ void ILaser_PF400::sdkCallbackScatterBitmap1(IntelligentYUV* pBitmapData, void* 
     emit pSdkObj->sendCaptureImage(bgr);
 }
 
+/** 监控原图：SDK 回调 */
 /**
- * @brief ???? YUV ??????? BGR ? sendMonitorImage?
- * @param pBitmapData YUV ??
- * @param pUser ILaser_PF400*?
- * @param dwInstanceId ?? ID?
+ * @brief 监控相机 YUV 回调：节流后转 BGR 并 sendMonitorImage。
+ * @param pBitmapData YUV 帧。
+ * @param pUser ILaser_PF400 实例指针。
+ * @param dwInstanceId 实例 ID。
  */
 void ILaser_PF400::sdkCallbackScatterBitmap2(IntelligentYUV* pBitmapData, void* pUser, uint32_t dwInstanceId)
 {
@@ -313,9 +315,9 @@ void ILaser_PF400::sdkCallbackScatterBitmap2(IntelligentYUV* pBitmapData, void* 
 
 
 /**
- * @brief ?? I420 ??? cv::cvtColor ? BGR?
- * @param pBitmapData SDK YUV ?????????
- * @return BGR Mat??????????
+ * @brief 拼装 I420 平面并 cv::cvtColor 为 BGR。
+ * @param pBitmapData SDK YUV 三平面指针与宽高。
+ * @return BGR Mat；平面无效时返回空。
  */
 cv::Mat ILaser_PF400::convertYUV420PtoMat(IntelligentYUV* pBitmapData)
 {
