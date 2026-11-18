@@ -1,0 +1,16 @@
+&ACCESS RV
+&REL 1
+&COMMENT Write RG_X..RG_C from $POS_ACT (robot interpreter only, not SPS)
+DEF PublishRobotPose()
+  ; $POS_ACT is invalid until tool/base are set (KSS1419 XYZABC TOOL not programmed).
+  IF ($ACT_TOOL >= 1) AND ($ACT_TOOL <= 16) AND ($ACT_BASE >= 0) AND ($ACT_BASE <= 32) THEN
+    ON_ERROR_PROCEED
+    RG_X = RealToBits($POS_ACT.X)
+    RG_Y = RealToBits($POS_ACT.Y)
+    RG_Z = RealToBits($POS_ACT.Z)
+    RG_A = RealToBits($POS_ACT.A)
+    RG_B = RealToBits($POS_ACT.B)
+    RG_C = RealToBits($POS_ACT.C)
+  ENDIF
+  $TIMER[23] = 0
+END

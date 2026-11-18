@@ -8,7 +8,7 @@ DEF  SPS ( )
   ; outputs, so that the manual commands from the PC and the requests from
   ; pc2kuka.src cannot fight over them.
   ;
-  ; Signal numbers are the $OUT map starting at 3025.
+  ; OUT robot image $OUT[3025]..$OUT[4048].
   ; Low index is LSB. 32-bit signals are IEEE754 binary32.
   ;
   ; RG_AXIS_VEL      max |A1..A6| speed, deg/s
@@ -18,13 +18,14 @@ DEF  SPS ( )
   ; RG_E1..RG_E3     $AXIS_ACT.E1..E3
   ; RG_E4..RG_E6     $AXIS_ACT.E4..E6
   ; RG_SJ1..RG_SJ6   $AXIS_ACT.A1..A6, deg
-  ; RG_X..RG_C       $POS_ACT in the current tool and base
-  ; RG_STATUS_S/T    $POS_ACT.S and .T, the arm configuration
+  ; RG_X..RG_C       $POS_ACT, written by pc2kuka PublishRobotPose (SPS cannot read POS)
   ; RG_TCP_VEL       $VEL_ACT in mm/s, the actual path speed
   ; RG_OV_PRO        $OV_PRO, which scales the programmed weld speed
   ; RG_MODE_OP       1 T1, 2 T2, 3 AUT, 4 EX
   ; RG_PRO_STATE     1 free, 2 reset, 3 active, 4 stop, 5 end
-  ; RG_ACT_TOOL/BASE the tool and base the task channel last applied
+  ; RG_ACT_TOOL/BASE from WT_TOOL/WT_BASE (do not use $TOOL/$BASE/$POS_ACT in SPS: KSS1419)
+  ; Requires in $config.dat: SIGNAL RG_ACT_TOOL, RG_ACT_BASE, RG_APP_ERR, RS_PC_ALIVE,
+  ; TC_TASK_BUSY, WT_GAS_REQ, WT_ARC_REQ, WT_ACT_JOB, WT_ACT_WIRE, EWM_*, PLC_EWM_*, RG_*, WG_*.
   ; RG_HEARTBEAT     frame counter, lets the PC detect a frozen image
   ; RG_PC_LINK_OK    RS_PC_ALIVE has changed within the last 2 s
   ;
@@ -37,8 +38,8 @@ DEF  SPS ( )
   ; WG_WIRE_STICKING, WG_WELD_ERROR, WG_MALFUNCTION, WG_ERR_CODE
   ;   have no source input in $config.dat and are written FALSE / 0.
   ;
-  ; This submit uses $TIMER[20] and $TIMER[22]. Do not use those timers in a
-  ; robot program.
+  ; This submit uses $TIMER[20] and $TIMER[22]. pc2kuka uses $TIMER[21] (arc),
+  ; $TIMER[23] (pose publish). Do not reuse those in other robot programs.
 
   DECL INT i
   DECL INT iDtMs
@@ -175,16 +176,6 @@ DEF  SPS ( )
     RG_SJ5 = RealToBits(rA[5])
     RG_SJ6 = RealToBits(rA[6])
 
-    RG_X = RealToBits($POS_ACT.X)
-    RG_Y = RealToBits($POS_ACT.Y)
-    RG_Z = RealToBits($POS_ACT.Z)
-    RG_A = RealToBits($POS_ACT.A)
-    RG_B = RealToBits($POS_ACT.B)
-    RG_C = RealToBits($POS_ACT.C)
-
-    RG_STATUS_S = $POS_ACT.S
-    RG_STATUS_T = $POS_ACT.T
-    RG_TCP_VEL = RealToBits($VEL_ACT * 1000.0)
     RG_OV_PRO = $OV_PRO
     RG_ACT_TOOL = WT_TOOL
     RG_ACT_BASE = WT_BASE
@@ -237,11 +228,7 @@ DEF  SPS ( )
 
     WG_ARC_STABILITY = DI_ArcStability
     WG_PS_READY = DI_WeldingPSReady
-    WG_WIRE_STICKING = FALSE
-    WG_WELD_ERROR = FALSE
     WG_WELDING_PROCESSING = DI_ArcStability
-    WG_MALFUNCTION = FALSE
-    WG_ERR_CODE = 0
     WG_REAL_VOLTAGE = GI_RealVoltage
     WG_REAL_CURRENT = GI_RealCurrent
     WG_REAL_WIRE_SPEED = GI_RealWireSpeed
