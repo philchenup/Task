@@ -1,0 +1,8 @@
+/build/
+*.pro.user
+*.user
+*.o
+moc_*
+Makefile
+.qmake.stash
+/flow-editor
