@@ -1,4 +1,5 @@
 #include "FR5.h"
+#include "libfairino/robot.h"
 #include "tool/MathUtils.h"
 
 #include <QThread>
@@ -34,10 +35,29 @@ void zeroExaxis(ExaxisPos& epos)
     std::memset(&epos, 0, sizeof(epos));
 }
 
+std::vector<double> toVector(const JointPos& jv)
+{
+    std::vector<double> jointVec(6);
+    for (int i = 0; i < 6; ++i)
+        jointVec[i] = jv.jPos[i];
+    return jointVec;
+}
+
+JointPos toJoint(const std::vector<double>& jointVec)
+{
+    JointPos jv;
+    zeroJoint(jv);
+    const int n = std::min(6, static_cast<int>(jointVec.size()));
+    for (int i = 0; i < n; ++i)
+        jv.jPos[i] = jointVec[i];
+    return jv;
+}
+
 } // namespace
 
 FR5::FR5(QObject* parent)
     : IRobot(parent)
+    , m_robot(std::make_unique<FRRobot>())
     , m_feedbackTimer(new QTimer(this))
     , m_drillTimer(new QTimer(this))
 {
@@ -56,7 +76,7 @@ FR5::~FR5()
     m_feedbackTimer->stop();
     m_drillTimer->stop();
     if (m_connected)
-        m_robot.CloseRPC();
+        m_robot->CloseRPC();
 }
 
 bool FR5::isConnected() const { return m_connected.load(); }
@@ -84,7 +104,7 @@ void FR5::connectRobot(const RobotPara& para)
 
 void FR5::connectTask(const std::string& ip)
 {
-    const int ret = m_robot.RPC(ip.c_str());
+    const int ret = m_robot->RPC(ip.c_str());
     if (ret != 0) {
         QMetaObject::invokeMethod(this, [=]() {
             emit sigError(QStringLiteral("法奥 FR5 连接失败（IP: %1）").arg(QString::fromStdString(ip)));
@@ -93,8 +113,8 @@ void FR5::connectTask(const std::string& ip)
         return;
     }
 
-    m_robot.Mode(0);
-    m_robot.SetSpeed(static_cast<int>(m_globalSpeed));
+    m_robot->Mode(0);
+    m_robot->SetSpeed(static_cast<int>(m_globalSpeed));
 
     QMetaObject::invokeMethod(this, [=]() {
         m_connected = true;
@@ -114,7 +134,7 @@ void FR5::disconnectRobot()
     m_drillTimer->stop();
 
     QThread* t = QThread::create([=]() {
-        const int ret = m_robot.CloseRPC();
+        const int ret = m_robot->CloseRPC();
         QMetaObject::invokeMethod(this, [=]() {
             m_connected = false;
             m_enabled = false;
@@ -143,9 +163,9 @@ void FR5::enableRobot(bool enable)
     }
 
     std::thread([=]() {
-        const int ret = m_robot.RobotEnable(enable ? 1 : 0);
+        const int ret = m_robot->RobotEnable(enable ? 1 : 0);
         if (enable && ret == 0)
-            m_robot.Mode(0);
+            m_robot->Mode(0);
 
         QMetaObject::invokeMethod(this, [=]() {
             if (ret == 0) {
@@ -171,8 +191,8 @@ void FR5::clearError()
     std::thread([=]() {
         int mainCode = 0;
         int subCode = 0;
-        m_robot.GetRobotErrorCode(&mainCode, &subCode);
-        const int ret = m_robot.ResetAllError();
+        m_robot->GetRobotErrorCode(&mainCode, &subCode);
+        const int ret = m_robot->ResetAllError();
         QMetaObject::invokeMethod(this, [=]() {
             if (ret == 0) {
                 emit sigStatusMessage(QStringLiteral("法奥 FR5 错误已清除（%1 / %2）")
@@ -200,7 +220,7 @@ void FR5::applySpeed()
 {
     if (!m_connected)
         return;
-    m_robot.SetSpeed(static_cast<int>(m_globalSpeed));
+    m_robot->SetSpeed(static_cast<int>(m_globalSpeed));
 }
 
 void FR5::resetPlace()
@@ -221,7 +241,7 @@ void FR5::moveJoint(const std::vector<double>& joint, const QString& tag)
         JointPos jPos = toJoint(jointCopy);
         DescPose desc;
         zeroPose(desc);
-        if (m_robot.GetForwardKin(&jPos, &desc) != 0) {
+        if (m_robot->GetForwardKin(&jPos, &desc) != 0) {
             QMetaObject::invokeMethod(this, [=]() {
                 emit sigMoveFinished(false, tag);
                 emit sigError(QStringLiteral("法奥 FR5 关节正解失败 [%1]").arg(tag));
@@ -234,7 +254,7 @@ void FR5::moveJoint(const std::vector<double>& joint, const QString& tag)
         DescPose offset;
         zeroPose(offset);
         const float ovl = 100.f;
-        const int ret = m_robot.MoveJ(&jPos, &desc, 0, 0, 100.f, 100.f, ovl, &epos, 0.f, 0, &offset);
+        const int ret = m_robot->MoveJ(&jPos, &desc, 0, 0, 100.f, 100.f, ovl, &epos, 0.f, 0, &offset);
         if (ret != 0) {
             QMetaObject::invokeMethod(this, [=]() {
                 emit sigMoveFinished(false, tag);
@@ -264,7 +284,7 @@ void FR5::movePose(const std::vector<double>& pose, const QString& tag)
         cart.rpy.ry = poseCopy[4];
         cart.rpy.rz = poseCopy[5];
 
-        const int ret = m_robot.MoveCart(&cart, 0, 0, 100.f, 100.f, 100.f, 0.f, -1);
+        const int ret = m_robot->MoveCart(&cart, 0, 0, 100.f, 100.f, 100.f, 0.f, -1);
         if (ret != 0) {
             QMetaObject::invokeMethod(this, [=]() {
                 emit sigMoveFinished(false, tag);
@@ -334,7 +354,7 @@ int FR5::runTrajectoryPoint(const std::vector<std::vector<double>>& path)
 
     const std::vector<std::vector<double>> pathCopy = path;
     std::thread([=]() {
-        int ret = m_robot.ServoMoveStart();
+        int ret = m_robot->ServoMoveStart();
         if (ret != 0) {
             QMetaObject::invokeMethod(this, [=]() {
                 emit sigError(QStringLiteral("servo mode enable failed!"));
@@ -356,13 +376,13 @@ int FR5::runTrajectoryPoint(const std::vector<std::vector<double>>& path)
             // Grasp path matches the JAKA servo stream (radians). ServoJ takes degrees.
             for (int i = 0; i < 6; ++i)
                 jpos.jPos[i] = qRad[i] * 180.0 / M_PI;
-            m_robot.ServoJ(&jpos, &axisPos, 0.f, 0.f, 0.008f, 0.f, 0.f);
+            m_robot->ServoJ(&jpos, &axisPos, 0.f, 0.f, 0.008f, 0.f, 0.f);
             next += std::chrono::milliseconds(8);
             std::this_thread::sleep_until(next);
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        m_robot.ServoMoveEnd();
+        m_robot->ServoMoveEnd();
 
         const bool ok = !isStop;
         QMetaObject::invokeMethod(this, [=]() {
@@ -434,7 +454,7 @@ void FR5::robotStop()
     isStop = true;
     m_drillTimer->stop();
     if (m_connected)
-        m_robot.StopMotion();
+        m_robot->StopMotion();
 }
 
 void FR5::robotStart()
@@ -585,7 +605,7 @@ bool FR5::readCurrentPose(std::vector<double>& pose)
 {
     DescPose tcp;
     zeroPose(tcp);
-    if (m_robot.GetActualTCPPose(1, &tcp) != 0)
+    if (m_robot->GetActualTCPPose(1, &tcp) != 0)
         return false;
 
     pose.resize(6);
@@ -602,7 +622,7 @@ bool FR5::readCurrentJoint(std::vector<double>& joint)
 {
     JointPos jv;
     zeroJoint(jv);
-    if (m_robot.GetActualJointPosDegree(1, &jv) != 0)
+    if (m_robot->GetActualJointPosDegree(1, &jv) != 0)
         return false;
 
     joint.resize(6);
@@ -757,24 +777,6 @@ std::vector<double> FR5::toDouble(const utils::Joint& j)
     return std::vector<double>{ j.j1, j.j2, j.j3, j.j4, j.j5, j.j6 };
 }
 
-std::vector<double> FR5::toVector(const JointPos& jv)
-{
-    std::vector<double> jointVec(6);
-    for (int i = 0; i < 6; ++i)
-        jointVec[i] = jv.jPos[i];
-    return jointVec;
-}
-
-JointPos FR5::toJoint(const std::vector<double>& joint_vec)
-{
-    JointPos jv;
-    zeroJoint(jv);
-    const int n = std::min(6, static_cast<int>(joint_vec.size()));
-    for (int i = 0; i < n; ++i)
-        jv.jPos[i] = joint_vec[i];
-    return jv;
-}
-
 std::vector<std::vector<double>> FR5::densifyJoints(const std::vector<std::vector<double>>& joints)
 {
     const double dt = 0.008;
@@ -882,7 +884,7 @@ int FR5::getPlaceJoint(const std::vector<double>& cur_place_joint, const utils::
 
     DescPose pose0;
     zeroPose(pose0);
-    int ret = m_robot.GetForwardKin(&cur, &pose0);
+    int ret = m_robot->GetForwardKin(&cur, &pose0);
     if (ret != 0)
         return ret;
 
@@ -894,7 +896,7 @@ int FR5::getPlaceJoint(const std::vector<double>& cur_place_joint, const utils::
     JointPos ref = cur;
     JointPos solved;
     zeroJoint(solved);
-    ret = m_robot.GetInverseKinRef(0, &poseN, &ref, &solved);
+    ret = m_robot->GetInverseKinRef(0, &poseN, &ref, &solved);
     if (ret == 0)
         new_place_joint = toVector(solved);
     return ret;

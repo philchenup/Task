@@ -2,16 +2,18 @@
 #define FR5_H
 
 #include "device_robot/IRobot.h"
-#include "libfairino/robot.h"
 #include "utils/utils.h"
 
 #include <QTimer>
 #include <QMutex>
 #include <atomic>
+#include <memory>
 #include <mutex>
 #include <vector>
 #include <string>
 #include <utility>
+
+class FRRobot;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FR5 — 法奥 FR5，接口与 JAKAZU12 对齐
@@ -39,10 +41,6 @@ public:
 
     int getPlaceJoint(const std::vector<double>& cur_place_joint, const utils::ArrayConfig& cfg,
         int n, bool x_first, std::vector<double>& new_place_joint);
-
-    std::vector<double> toVector(const JointPos& jv);
-
-    JointPos toJoint(const std::vector<double>& joint_vec);
 
 public slots:
     void connectRobot(const RobotPara& para) override;
@@ -129,7 +127,7 @@ private:
     mutable std::mutex m_snapMutex;
     FeedbackSnapshot m_snap;
 
-    FRRobot m_robot;
+    std::unique_ptr<FRRobot> m_robot;
 
     std::atomic<bool> m_connected{ false };
     std::atomic<bool> m_enabled{ false };
