@@ -343,6 +343,8 @@ int FR5::runTrajectoryPoint(const std::vector<std::vector<double>>& path)
             return;
         }
 
+        ExaxisPos axisPos;
+        zeroExaxis(axisPos);
         auto next = std::chrono::steady_clock::now();
         for (const auto& qRad : pathCopy) {
             if (isStop)
@@ -354,7 +356,7 @@ int FR5::runTrajectoryPoint(const std::vector<std::vector<double>>& path)
             // Grasp path matches the JAKA servo stream (radians). ServoJ takes degrees.
             for (int i = 0; i < 6; ++i)
                 jpos.jPos[i] = qRad[i] * 180.0 / M_PI;
-            m_robot.ServoJ(&jpos, 0.f, 0.f, 0.008f, 0.f, 0.f);
+            m_robot.ServoJ(&jpos, &axisPos, 0.f, 0.f, 0.008f, 0.f, 0.f);
             next += std::chrono::milliseconds(8);
             std::this_thread::sleep_until(next);
         }
