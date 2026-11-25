@@ -32,6 +32,10 @@ public:
 
     void updatePointCloud(const std::vector<TY_VECT_3F>& points, const cv::Mat& color, float time);
 
+    bool setColorResolution(int width, int height);
+    void setAlignDepthToColor(bool enable) { m_mapDepthToColor = enable; }
+    bool alignDepthToColor(const cv::Mat& depth, const cv::Mat& color, cv::Mat& alignedDepth);
+
 public slots:
     void searchDevice() override;
     void captureDevice() override;
@@ -49,6 +53,8 @@ private:
     bool configureComponents();
     bool prepareBuffers();
     bool getDefaultImageMode(TY_COMPONENT_ID component, TY_IMAGE_MODE& imageMode);
+    bool selectColorImageMode(int width, int height, TY_IMAGE_MODE& imageMode);
+    void readColorCalib();
     void colorIspInitSetting();
     void parseFrame(const TY_FRAME_DATA& frame, cv::Mat& depth, cv::Mat& color);
     bool parseColor(const TY_IMAGE_DATA& image, cv::Mat& color);
@@ -71,7 +77,9 @@ private:
     float m_depthScale = 1.f;
     bool m_isDepthDistortion = false;
     bool m_hasColorCalib = false;
-    bool m_mapDepthToColor = false;
+    bool m_mapDepthToColor = true;
+    int m_colorWidth = 1280;
+    int m_colorHeight = 960;
     bool m_withColorCam = true;
     bool m_libInited = false;
     bool connected = false;

@@ -122,6 +122,31 @@ int bayer12Code(int pixelFormat)
     }
 }
 
+int modePixelFormat(TY_IMAGE_MODE mode)
+{
+#if defined(TYPixelFormat)
+    return TYPixelFormat(mode);
+#else
+    return static_cast<int>((static_cast<uint32_t>(mode) >> 24) & 0xFF);
+#endif
+}
+
+int colorFormatRank(int format)
+{
+    switch (format) {
+    case TY_PIXEL_FORMAT_YUYV: return 0;
+    case TY_PIXEL_FORMAT_RGB: return 1;
+    case TY_PIXEL_FORMAT_BGR: return 2;
+    case TY_PIXEL_FORMAT_BAYER8GBRG:
+    case TY_PIXEL_FORMAT_BAYER8BGGR:
+    case TY_PIXEL_FORMAT_BAYER8GRBG:
+    case TY_PIXEL_FORMAT_BAYER8RGGB:
+        return 3;
+    case TY_PIXEL_FORMAT_JPEG: return 4;
+    default: return 100;
+    }
+}
+
 } // namespace
 
 TuYang::TuYang(QWidget* parent)
@@ -390,6 +415,124 @@ bool TuYang::getDefaultImageMode(TY_COMPONENT_ID component, TY_IMAGE_MODE& image
     return true;
 }
 
+bool TuYang::selectColorImageMode(int width, int height, TY_IMAGE_MODE& imageMode)
+{
+    uint32_t count = 0;
+    if (TYGetEnumEntryCount(m_hDevice, TY_COMPONENT_RGB_CAM, TY_ENUM_IMAGE_MODE, &count) != TY_STATUS_OK
+        || count == 0) {
+        return false;
+    }
+
+    std::vector<TY_ENUM_ENTRY> entries(count);
+    uint32_t filled = 0;
+    if (TYGetEnumEntryInfo(m_hDevice, TY_COMPONENT_RGB_CAM, TY_ENUM_IMAGE_MODE,
+            entries.data(), count, &filled) != TY_STATUS_OK || filled == 0) {
+        return false;
+    }
+
+    int best = -1;
+    int bestRank = 1000;
+    for (uint32_t i = 0; i < filled; ++i) {
+        if (TYImageWidth(entries[i].value) != width || TYImageHeight(entries[i].value) != height)
+            continue;
+        const int rank = colorFormatRank(modePixelFormat(entries[i].value));
+        if (rank < bestRank) {
+            bestRank = rank;
+            best = static_cast<int>(i);
+        }
+    }
+    if (best < 0)
+        return false;
+
+    imageMode = entries[best].value;
+    return true;
+}
+
+bool TuYang::setColorResolution(int width, int height)
+{
+    if (width <= 0 || height <= 0) {
+        printE("Color resolution is invalid");
+        return false;
+    }
+    m_colorWidth = width;
+    m_colorHeight = height;
+    if (!m_hDevice)
+        return true;
+
+    const bool restart = connected;
+    if (restart) {
+        TYStopCapture(m_hDevice);
+        TYClearBufferQueue(m_hDevice);
+        for (char* buffer : m_frameBuffers)
+            delete[] buffer;
+        m_frameBuffers.clear();
+        m_frameSize = 0;
+    }
+
+    TY_IMAGE_MODE imageMode = 0;
+    const bool modeReady = selectColorImageMode(width, height, imageMode)
+        && TYSetEnum(m_hDevice, TY_COMPONENT_RGB_CAM, TY_ENUM_IMAGE_MODE, imageMode) == TY_STATUS_OK;
+    if (!modeReady) {
+        printE(tr("Set color image mode %1x%2 failed").arg(width).arg(height));
+        if (restart && (!prepareBuffers() || TYStartCapture(m_hDevice) != TY_STATUS_OK))
+            printE("Restart capture after color resolution change failed");
+        return false;
+    }
+    printI(tr("Select Color Image Mode: %1x%2")
+        .arg(TYImageWidth(imageMode))
+        .arg(TYImageHeight(imageMode)));
+
+    if (!restart)
+        return true;
+
+    readColorCalib();
+    if (m_ispHandle)
+        colorIspInitSetting();
+    if (!prepareBuffers() || TYStartCapture(m_hDevice) != TY_STATUS_OK) {
+        printE("Restart capture after color resolution change failed");
+        return false;
+    }
+    return true;
+}
+
+void TuYang::readColorCalib()
+{
+    m_hasColorCalib = false;
+    bool hasColorCalib = false;
+    if (TYHasFeature(m_hDevice, TY_COMPONENT_RGB_CAM, TY_STRUCT_CAM_CALIB_DATA, &hasColorCalib) != TY_STATUS_OK
+        || !hasColorCalib) {
+        return;
+    }
+    std::memset(&m_colorCalib, 0, sizeof(m_colorCalib));
+    if (TYGetStruct(m_hDevice, TY_COMPONENT_RGB_CAM, TY_STRUCT_CAM_CALIB_DATA,
+            &m_colorCalib, sizeof(m_colorCalib)) == TY_STATUS_OK) {
+        m_hasColorCalib = true;
+    }
+}
+
+bool TuYang::alignDepthToColor(const cv::Mat& depth, const cv::Mat& color, cv::Mat& alignedDepth)
+{
+    if (depth.empty() || depth.type() != CV_16U || color.empty() || color.cols == 0 || !m_hasColorCalib)
+        return false;
+
+    const int outW = depth.cols;
+    const int outH = depth.cols * color.rows / color.cols;
+    if (outW <= 0 || outH <= 0)
+        return false;
+
+    cv::Mat mapped = cv::Mat::zeros(cv::Size(outW, outH), CV_16U);
+    if (TYMapDepthImageToColorCoordinate(
+            &m_depthCalib,
+            depth.cols, depth.rows, depth.ptr<uint16_t>(),
+            &m_colorCalib,
+            mapped.cols, mapped.rows, mapped.ptr<uint16_t>(),
+            m_depthScale) != TY_STATUS_OK) {
+        return false;
+    }
+    cv::resize(mapped, alignedDepth, color.size(), 0, 0, cv::INTER_NEAREST);
+    return !alignedDepth.empty();
+}
+
 void TuYang::colorIspInitSetting()
 {
     if (!m_ispHandle || !m_hDevice)
@@ -525,15 +668,10 @@ bool TuYang::configureComponents()
             printW("Open RGB camera failed");
             return true;
         }
-        bool hasColorCalib = false;
-        if (TYHasFeature(m_hDevice, TY_COMPONENT_RGB_CAM, TY_STRUCT_CAM_CALIB_DATA, &hasColorCalib) == TY_STATUS_OK
-            && hasColorCalib) {
-            std::memset(&m_colorCalib, 0, sizeof(m_colorCalib));
-            if (TYGetStruct(m_hDevice, TY_COMPONENT_RGB_CAM, TY_STRUCT_CAM_CALIB_DATA,
-                    &m_colorCalib, sizeof(m_colorCalib)) == TY_STATUS_OK) {
-                m_hasColorCalib = true;
-            }
-        }
+        if (!setColorResolution(m_colorWidth, m_colorHeight))
+            printW(tr("Color resolution %1x%2 was not applied").arg(m_colorWidth).arg(m_colorHeight));
+        TYEnableComponents(m_hDevice, TY_COMPONENT_RGB_CAM);
+        readColorCalib();
         if (TYISPCreate(&m_ispHandle) == TY_STATUS_OK) {
             colorIspInitSetting();
         } else {
@@ -724,19 +862,8 @@ bool TuYang::doRegister(const cv::Mat& depth, const cv::Mat& color, cv::Mat& und
         return false;
 
     if (m_mapDepthToColor) {
-        const int outW = depth.cols;
-        const int outH = depth.cols * undistortColor.rows / undistortColor.cols;
-        out = cv::Mat::zeros(cv::Size(outW, outH), CV_16U);
-        if (TYMapDepthImageToColorCoordinate(
-                &m_depthCalib,
-                depth.cols, depth.rows, depth.ptr<uint16_t>(),
-                &m_colorCalib,
-                out.cols, out.rows, out.ptr<uint16_t>(), m_depthScale) != TY_STATUS_OK) {
+        if (!alignDepthToColor(depth, undistortColor, out))
             return false;
-        }
-        cv::Mat resized;
-        cv::resize(out, resized, undistortColor.size(), 0, 0, cv::INTER_NEAREST);
-        out = resized;
     } else {
         out = cv::Mat::zeros(depth.size(), CV_8UC3);
         if (TYMapRGBImageToDepthCoordinate(
